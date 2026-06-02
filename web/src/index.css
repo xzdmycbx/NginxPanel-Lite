@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 170 30% 98%;
+    --foreground: 200 24% 16%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 200 24% 16%;
+
+    --primary: 168 72% 39%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 168 30% 94%;
+    --secondary-foreground: 200 24% 22%;
+
+    --muted: 168 24% 95%;
+    --muted-foreground: 200 10% 46%;
+
+    --accent: 168 44% 92%;
+    --accent-foreground: 200 24% 20%;
+
+    --destructive: 0 72% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 170 22% 89%;
+    --input: 170 22% 89%;
+    --ring: 168 72% 42%;
+
+    --radius: 0.85rem;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 100% -10%, hsl(168 60% 94%) 0%, transparent 55%),
+      radial-gradient(1000px 500px at -10% 110%, hsl(190 60% 95%) 0%, transparent 50%),
+      hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: theme("fontFamily.sans");
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(10px);
+  }
+}
