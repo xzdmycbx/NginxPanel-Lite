@@ -1,0 +1,85 @@
+services:
+  panel:
+    build: .
+    image: nginxpanel-lite:latest
+    container_name: nginx-panel-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NGINX_CONTAINER_NAME: nginx-panel-nginx
+      # Talk to Docker via the hardened socket-proxy, NOT the raw host socket.
+      PANEL_DOCKER_HOST: tcp://socket-proxy:2375
+      PANEL_NGINX_CONF_DIR: /etc/nginx-panel
+      PANEL_CERTS_DIR: /etc/nginx-panel/certs
+      PANEL_ACME_WEBROOT: /var/www/acme-webroot
+      PANEL_DATA_DIR: /data
+    ports:
+      - "${PANEL_HTTP_PORT:-8080}:8080"
+    volumes:
+      - nginx-config:/etc/nginx-panel
+      - acme-webroot:/var/www/acme-webroot
+      - paneldata:/data
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 256
+    depends_on:
+      - nginx
+      - socket-proxy
+    healthcheck:
+      test: ["CMD", "/panel", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Hardened Docker API gateway: the panel reaches Docker ONLY through this
+  # proxy, which exposes just the containers/exec endpoints needed for
+  # `nginx -t` / reload. The raw host socket is never mounted into the panel.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: nginx-panel-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"   # GET /containers (find + inspect the nginx container)
+      EXEC: "1"         # /exec endpoints (create/start/inspect exec)
+      POST: "1"         # allow POST (proxy is read-only by default)
+      VERSION: "1"      # API version negotiation
+      # everything else (images/networks/volumes/build/...) stays denied (0)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    # Not published to the host; only reachable on the internal compose network.
+    expose:
+      - "2375"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx-panel-nginx
+    restart: unless-stopped
+    # The panel seeds & manages /etc/nginx-panel/nginx.conf on the shared volume
+    # (so it is user-editable). Wait for it, then run nginx with -c against it.
+    command:
+      - sh
+      - -c
+      - "until [ -f /etc/nginx-panel/nginx.conf ]; do echo 'waiting for panel to seed nginx.conf...'; sleep 1; done; exec nginx -c /etc/nginx-panel/nginx.conf -g 'daemon off;'"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - nginx-config:/etc/nginx-panel
+      - acme-webroot:/var/www/acme-webroot
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  nginx-config:
+  acme-webroot:
+  paneldata:

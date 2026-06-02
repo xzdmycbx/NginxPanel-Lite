@@ -1,0 +1,8 @@
+.git
+.idea
+.claude
+web/node_modules
+web/dist
+data
+*.log
+.env
