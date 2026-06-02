@@ -1,0 +1,53 @@
+# Managed by NginxPanel-Lite — {{ .Slug }}. 域名主文件，可在面板中编辑；location 经 include 引入。
+{{ range .UpstreamBlocks }}{{ . }}
+{{ end -}}
+server {
+    listen 80;
+    server_name {{ .ServerNames }};
+
+    access_log {{ .AccessLog }} main;
+    error_log  {{ .ErrorLog }} warn;
+
+    # ACME HTTP-01 必须先于任何重定向。
+    location /.well-known/acme-challenge/ {
+        root {{ .AcmeWebroot }};
+        default_type "text/plain";
+        try_files $uri =404;
+    }
+{{ if and .SSLEnabled .ForceHTTPSRedirect }}
+    location / {
+        return 301 https://$host$request_uri;
+    }
+{{- else }}
+    include {{ .LocationsGlob }};
+{{- if .RawConfigOverride }}
+
+    # --- 用户自定义配置 ---
+    {{ .RawConfigOverride }}
+{{- end }}
+{{- end }}
+}
+{{- if .SSLEnabled }}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name {{ .ServerNames }};
+
+    access_log {{ .AccessLog }} main;
+    error_log  {{ .ErrorLog }} warn;
+
+    ssl_certificate     {{ .CertPath }};
+    ssl_certificate_key {{ .KeyPath }};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_session_cache shared:SSL:10m;
+
+    include {{ .LocationsGlob }};
+{{- if .RawConfigOverride }}
+
+    # --- 用户自定义配置 ---
+    {{ .RawConfigOverride }}
+{{- end }}
+}
+{{- end }}
