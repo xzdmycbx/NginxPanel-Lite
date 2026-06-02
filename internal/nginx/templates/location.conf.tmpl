@@ -1,0 +1,23 @@
+# Managed by NginxPanel-Lite — {{ .Slug }} / location {{ .Path }}（单个反向代理块，可在面板中编辑）
+location {{ .Path }} {
+    proxy_pass {{ .ProxyPass }};
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+{{- if .WebsocketUpgrade }}
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+{{- end }}
+{{- if .CacheEnabled }}
+    proxy_cache npl_cache;
+    proxy_cache_valid 200 301 302 10m;
+    proxy_cache_valid 404 1m;
+    proxy_cache_key $scheme$host$request_uri;
+    add_header X-Cache-Status $upstream_cache_status;
+{{- end }}
+{{- if .ExtraConfig }}
+    {{ .ExtraConfig }}
+{{- end }}
+}
