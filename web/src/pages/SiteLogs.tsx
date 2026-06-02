@@ -21,6 +21,8 @@ export function SiteLogs({ site }: { site: Site }) {
   const { data, isFetching, refetch } = useQuery({
     queryKey: ["site-logs", site.id, type],
     queryFn: () => siteLogsApi.tail(site.id, type),
+    // 每次进入日志页签（组件重新挂载）或切换日志类型都强制拉取最新内容
+    refetchOnMount: "always",
   });
 
   async function clear() {

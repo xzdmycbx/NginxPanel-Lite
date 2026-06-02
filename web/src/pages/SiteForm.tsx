@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, X, FileCode, Trash2, Database } from "lucide-react";
+import { ArrowLeft, Plus, X, FileCode, Trash2, Database, Network, ShieldCheck, ScrollText } from "lucide-react";
 import { toast } from "sonner";
 import { sitesApi, type SiteInput } from "@/api/sites";
 import { apiError, nginxOutput } from "@/api/client";
@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FullPageSpinner, Spinner } from "@/components/ui/spinner";
+import { TabsBar, type TabItem } from "@/components/ui/tabs";
 import { useAuth } from "@/auth/AuthProvider";
 import { SslPanel } from "./SslPanel";
 import { SiteFiles } from "./SiteFiles";
@@ -35,6 +36,8 @@ const emptyLoc = (path = "/"): LocState => ({
   extraConfig: "",
 });
 
+type SiteTab = "config" | "ssl" | "logs" | "files";
+
 function locationsFromSite(site: Site): LocState[] {
   if (site.locations && site.locations.length) {
     return site.locations.map((l) => ({
@@ -51,6 +54,25 @@ function locationsFromSite(site: Site): LocState[] {
   return [emptyLoc()];
 }
 
+interface FormState {
+  name: string;
+  domains: string[];
+  redirect: boolean;
+  rawOverride: string;
+  locations: LocState[];
+}
+
+// 表单初始值：useEffect 初始化与「未保存改动」基线都用它，保证两者完全一致
+function initialFromSite(site: Site): FormState {
+  return {
+    name: site.name,
+    domains: site.serverNames.length ? site.serverNames : [""],
+    redirect: site.forceHttpsRedirect,
+    rawOverride: site.rawConfigOverride ?? "",
+    locations: locationsFromSite(site),
+  };
+}
+
 export function SiteForm() {
   const { id } = useParams();
   const isEdit = !!id;
@@ -60,6 +82,7 @@ export function SiteForm() {
   const isAdmin = me?.role === "admin";
   const [preview, setPreview] = useState<{ current: string; generated: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [tab, setTab] = useState<SiteTab>("config");
 
   const { data: site, isLoading } = useQuery({
     queryKey: ["site", id],
@@ -75,11 +98,12 @@ export function SiteForm() {
 
   useEffect(() => {
     if (site) {
-      setName(site.name);
-      setDomains(site.serverNames.length ? site.serverNames : [""]);
-      setRedirect(site.forceHttpsRedirect);
-      setRawOverride(site.rawConfigOverride ?? "");
-      setLocations(locationsFromSite(site));
+      const init = initialFromSite(site);
+      setName(init.name);
+      setDomains(init.domains);
+      setRedirect(init.redirect);
+      setRawOverride(init.rawOverride);
+      setLocations(init.locations);
     }
   }, [site]);
 
@@ -149,6 +173,20 @@ export function SiteForm() {
 
   if (isEdit && isLoading) return <FullPageSpinner />;
 
+  // 「未保存改动」检测：当前表单与从站点加载的基线不一致即为脏
+  const dirty =
+    isEdit &&
+    !!site &&
+    JSON.stringify({ name, domains, redirect, rawOverride, locations } satisfies FormState) !==
+      JSON.stringify(initialFromSite(site));
+
+  const tabItems: TabItem<SiteTab>[] = [
+    { value: "config", label: "代理配置", icon: Network, dot: dirty, dotTitle: "有未保存的配置改动" },
+    { value: "ssl", label: "SSL 证书", icon: ShieldCheck },
+    { value: "logs", label: "访问日志", icon: ScrollText },
+    ...(isAdmin ? [{ value: "files" as const, label: "配置文件", icon: FileCode }] : []),
+  ];
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-3">
@@ -161,6 +199,11 @@ export function SiteForm() {
         </div>
       </div>
 
+      {isEdit && site && <TabsBar value={tab} onChange={setTab} items={tabItems} />}
+
+      {/* 代理配置：基本信息 + 反向代理路径 + 高级，同属一个表单，统一保存 */}
+      {(!isEdit || tab === "config") && (
+        <>
       {/* 基本配置 */}
       <Card>
         <CardHeader>
@@ -314,10 +357,12 @@ export function SiteForm() {
           </div>
         </CardContent>
       </Card>
+        </>
+      )}
 
-      {isEdit && site && <SslPanel site={site} />}
-      {isEdit && site && <SiteLogs site={site} />}
-      {isEdit && site && isAdmin && <SiteFiles site={site} />}
+      {isEdit && site && tab === "ssl" && <SslPanel site={site} />}
+      {isEdit && site && tab === "logs" && <SiteLogs site={site} />}
+      {isEdit && site && isAdmin && tab === "files" && <SiteFiles site={site} />}
 
       <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)} className="max-w-3xl">
         <DialogHeader>
