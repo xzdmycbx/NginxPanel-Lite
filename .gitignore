@@ -1,0 +1,27 @@
+# Build output
+/panel
+/panel.exe
+/out/
+/.gocache/
+
+# Runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+.jwt_secret
+.env
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Embedded SPA build artifacts (placeholder index.html is kept)
+/internal/web/dist/assets/
+
+# IDE / OS
+.idea/
+.DS_Store
+*.log
+.claude/
+
