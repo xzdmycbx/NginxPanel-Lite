@@ -449,6 +449,90 @@ func TestRBACPermissions(t *testing.T) {
 	}
 }
 
+// TestSiteLock verifies a system admin can lock a site with their TOTP, that a
+// locked site rejects edits from everyone (incl. the system admin), and that
+// unlocking (also TOTP-gated) restores editing. Wrong/missing TOTP is rejected.
+func TestSiteLock(t *testing.T) {
+	t.Setenv("PANEL_DATA_DIR", t.TempDir())
+	t.Setenv("PANEL_NGINX_DRYRUN", "true")
+	t.Setenv("PANEL_COOKIE_SECURE", "false")
+	t.Setenv("PANEL_JWT_SECRET", "site-lock-test-secret-1234567890abc")
+
+	cfg, _ := config.Load()
+	application, err := app.New(cfg)
+	if err != nil {
+		t.Fatalf("app new: %v", err)
+	}
+	defer application.Close()
+	srv := httptest.NewServer(application.Server.Handler)
+	defer srv.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	post := func(path string, body any) (int, map[string]any) {
+		var buf bytes.Buffer
+		if body != nil {
+			_ = json.NewEncoder(&buf).Encode(body)
+		}
+		resp, err := client.Post(srv.URL+path, "application/json", &buf)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	put := func(path string, body any) int {
+		var buf bytes.Buffer
+		_ = json.NewEncoder(&buf).Encode(body)
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+path, &buf)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("PUT %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// system admin setup + TOTP (keep the secret to generate lock codes)
+	post("/api/setup", map[string]string{"username": "admin", "password": "Admin#1234"})
+	_, en := post("/api/auth/totp/enroll", nil)
+	secret := en["secret"].(string)
+	code, _ := totp.GenerateCode(secret, time.Now())
+	post("/api/auth/totp/activate", map[string]string{"code": code})
+
+	body := map[string]any{"name": "demo", "serverNames": []string{"d.example.com"}, "upstreamTargets": []string{"http://app:3000"}}
+	st, site := post("/api/sites", body)
+	if st != 200 {
+		t.Fatalf("create site: %d", st)
+	}
+	id := int(site["id"].(float64))
+
+	// lock without / with a wrong TOTP code is rejected
+	if st, _ := post(fmt.Sprintf("/api/sites/%d/lock", id), map[string]string{"code": "000000"}); st != http.StatusBadRequest {
+		t.Fatalf("lock with wrong code: want 400 got %d", st)
+	}
+	// lock with the real code succeeds
+	good, _ := totp.GenerateCode(secret, time.Now())
+	if st, _ := post(fmt.Sprintf("/api/sites/%d/lock", id), map[string]string{"code": good}); st != 200 {
+		t.Fatalf("lock with code: want 200 got %d", st)
+	}
+	// a locked site rejects edits even from the system admin
+	if st := put(fmt.Sprintf("/api/sites/%d", id), body); st != http.StatusForbidden {
+		t.Fatalf("edit locked site: want 403 got %d", st)
+	}
+	// unlock (TOTP again) then edit works
+	good2, _ := totp.GenerateCode(secret, time.Now())
+	if st, _ := post(fmt.Sprintf("/api/sites/%d/unlock", id), map[string]string{"code": good2}); st != 200 {
+		t.Fatalf("unlock: want 200 got %d", st)
+	}
+	if st := put(fmt.Sprintf("/api/sites/%d", id), body); st != 200 {
+		t.Fatalf("edit after unlock: want 200 got %d", st)
+	}
+}
+
 // TestRequireAuthBlocksWithoutSession ensures business routes reject anonymous calls.
 func TestRequireAuthBlocksWithoutSession(t *testing.T) {
 	t.Setenv("PANEL_DATA_DIR", t.TempDir())

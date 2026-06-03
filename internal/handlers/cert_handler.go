@@ -181,6 +181,106 @@ func (h *Handler) IssueACMECert(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+type updateCertReq struct {
+	Name    string   `json:"name"`
+	CertPem string   `json:"certPem"` // manual: re-upload (optional)
+	KeyPem  string   `json:"keyPem"`
+	Domains []string `json:"domains"` // acme: re-issue for these domains (optional)
+	Email   string   `json:"email"`
+	Env     string   `json:"env"`
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// UpdateCert renames a certificate and/or replaces its content (manual: new PEM;
+// acme: re-issue for new domains/email/env). After a content change nginx is
+// reloaded so every site using the cert syncs to the new files automatically.
+func (h *Handler) UpdateCert(c *gin.Context) {
+	var cert models.Certificate
+	if err := h.DB.First(&cert, c.Param("id")).Error; err != nil {
+		fail(c, http.StatusNotFound, "not_found", "证书不存在")
+		return
+	}
+	var in updateCertReq
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name != "" && in.Name != cert.Name {
+		if !validCertName(in.Name) {
+			fail(c, http.StatusBadRequest, "bad_name", "证书名称长度需为 1-64 个字符")
+			return
+		}
+		var n int64
+		h.DB.Model(&models.Certificate{}).Where("name = ? AND id <> ?", in.Name, cert.ID).Count(&n)
+		if n > 0 {
+			fail(c, http.StatusConflict, "name_taken", "证书名称已存在")
+			return
+		}
+		cert.Name = in.Name
+	}
+
+	contentChanged := false
+	if cert.Source == models.CertManual {
+		if strings.TrimSpace(in.CertPem) != "" || strings.TrimSpace(in.KeyPem) != "" {
+			info, err := ssl.ValidatePEMPair([]byte(in.CertPem), []byte(in.KeyPem))
+			if err != nil {
+				fail(c, http.StatusBadRequest, "bad_cert", err.Error())
+				return
+			}
+			if _, err := ssl.StoreManualCert(cert.CertPath, cert.KeyPath, []byte(in.CertPem), []byte(in.KeyPem)); err != nil {
+				fail(c, http.StatusInternalServerError, "internal", "写入证书失败")
+				return
+			}
+			cert.Domains, cert.NotAfter, cert.Issuer = info.Domains, &info.NotAfter, info.Issuer
+			contentChanged = true
+		}
+	} else { // acme: re-issue if domains/email/env changed
+		domains := cleanList(in.Domains)
+		env := h.SSL.ResolveEnv(in.Env)
+		if len(domains) > 0 && (!sameStrings(domains, cert.Domains) || in.Email != cert.ACMEEmail || env != cert.ACMEEnv) {
+			for _, d := range domains {
+				if err := validateServerName(d); err != nil {
+					fail(c, http.StatusBadRequest, "bad_request", err.Error())
+					return
+				}
+			}
+			info, err := h.SSL.Issue(c.Request.Context(), domains, in.Email, env, cert.CertPath, cert.KeyPath)
+			if err != nil {
+				cert.RenewError = err.Error()
+				h.DB.Save(&cert)
+				fail(c, http.StatusBadGateway, "acme_failed", err.Error())
+				return
+			}
+			now := time.Now()
+			cert.Domains, cert.ACMEEmail, cert.ACMEEnv = domains, in.Email, env
+			cert.NotAfter, cert.Issuer, cert.LastRenewedAt, cert.RenewError = &info.NotAfter, info.Issuer, &now, ""
+			contentChanged = true
+		}
+	}
+
+	if !saveOr500(c, h.DB, &cert) {
+		return
+	}
+	if contentChanged {
+		_ = h.Nginx.Reload(c.Request.Context()) // sync every site using this cert
+	}
+	audit.Set(c, &audit.Entry{Action: audit.ActCertUpdate, TargetType: audit.TargetCert, TargetID: idStr(cert.ID),
+		Detail: "修改证书 " + cert.Name})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // RenewCert re-issues an ACME certificate to the same paths, then reloads nginx
 // so any site using it picks up the new content.
 func (h *Handler) RenewCert(c *gin.Context) {

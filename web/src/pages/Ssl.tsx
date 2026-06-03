@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Plus, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { certsApi } from "@/api/certs";
 import { apiError, nginxOutput } from "@/api/client";
@@ -34,6 +34,24 @@ export function Ssl() {
   const [aDomains, setADomains] = useState("");
   const [aEmail, setAEmail] = useState("");
   const [aEnv, setAEnv] = useState("staging");
+
+  const [editCert, setEditCert] = useState<Certificate | null>(null);
+  const [eName, setEName] = useState("");
+  const [eCertPem, setECertPem] = useState("");
+  const [eKeyPem, setEKeyPem] = useState("");
+  const [eDomains, setEDomains] = useState("");
+  const [eEmail, setEEmail] = useState("");
+  const [eEnv, setEEnv] = useState("staging");
+
+  function openEdit(cert: Certificate) {
+    setEditCert(cert);
+    setEName(cert.name);
+    setECertPem("");
+    setEKeyPem("");
+    setEDomains(cert.domains.join("\n"));
+    setEEmail(cert.acmeEmail ?? "");
+    setEEnv(cert.acmeEnv || "staging");
+  }
 
   const upload = useMutation({
     mutationFn: () => certsApi.createManual(uName.trim(), certPem, keyPem),
@@ -83,6 +101,29 @@ export function Ssl() {
     onSuccess: () => {
       toast.success("证书已删除");
       setToDelete(null);
+      refetch();
+    },
+    onError: onErr,
+  });
+
+  const update = useMutation({
+    mutationFn: () => {
+      const cert = editCert!;
+      return cert.source === "manual"
+        ? certsApi.update(cert.id, { name: eName.trim(), certPem: eCertPem || undefined, keyPem: eKeyPem || undefined })
+        : certsApi.update(cert.id, {
+            name: eName.trim(),
+            domains: eDomains
+              .split(/[\s,，]+/)
+              .map((s) => s.trim())
+              .filter(Boolean),
+            email: eEmail.trim(),
+            env: eEnv,
+          });
+    },
+    onSuccess: () => {
+      toast.success("证书已修改");
+      setEditCert(null);
       refetch();
     },
     onError: onErr,
@@ -149,6 +190,9 @@ export function Ssl() {
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" title="编辑" onClick={() => openEdit(cert)}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
                       {cert.source === "acme" && (
                         <Button
                           variant="ghost"
@@ -252,6 +296,74 @@ export function Ssl() {
               </>
             ) : (
               "申请并续期"
+            )}
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <Dialog open={!!editCert} onOpenChange={(o) => !o && setEditCert(null)} className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>修改证书</DialogTitle>
+          <DialogDescription>
+            {editCert?.source === "acme"
+              ? "修改名称，或更改域名 / 邮箱后将重新签发。保存后所有使用该证书的站点自动同步。"
+              : "修改名称，或粘贴新的 PEM 替换证书内容（留空则只改名称）。替换后所有使用该证书的站点自动同步。"}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label>证书名称</Label>
+            <Input value={eName} onChange={(e) => setEName(e.target.value)} />
+          </div>
+          {editCert?.source === "manual" ? (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label>证书（fullchain.pem，留空则不替换）</Label>
+                <Textarea rows={4} placeholder="-----BEGIN CERTIFICATE-----" value={eCertPem} onChange={(e) => setECertPem(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>私钥（privkey.pem，留空则不替换）</Label>
+                <Textarea rows={4} placeholder="-----BEGIN PRIVATE KEY-----" value={eKeyPem} onChange={(e) => setEKeyPem(e.target.value)} />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label>域名（一行一个或逗号分隔，更改后会重新签发）</Label>
+                <Textarea rows={3} value={eDomains} onChange={(e) => setEDomains(e.target.value)} />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label>申请邮箱</Label>
+                  <Input type="email" value={eEmail} onChange={(e) => setEEmail(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>环境</Label>
+                  <Select
+                    value={eEnv}
+                    onChange={setEEnv}
+                    options={[
+                      { value: "staging", label: "测试环境（staging）" },
+                      { value: "production", label: "正式环境（production）" },
+                    ]}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setEditCert(null)}>
+            取消
+          </Button>
+          <Button disabled={update.isPending || !eName.trim()} onClick={() => update.mutate()}>
+            {update.isPending ? (
+              <>
+                <Spinner />
+                保存中…
+              </>
+            ) : (
+              "保存"
             )}
           </Button>
         </DialogFooter>

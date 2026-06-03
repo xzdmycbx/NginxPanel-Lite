@@ -42,6 +42,7 @@ export interface Site {
   rawConfigOverride?: string;
   rawEdited?: boolean;
   enabled: boolean;
+  locked: boolean;
   createdAt: string;
   updatedAt: string;
 }

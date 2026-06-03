@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Power, Trash2, ShieldCheck, Shield } from "lucide-react";
+import { Plus, Pencil, Power, Trash2, ShieldCheck, Shield, Lock, LockOpen } from "lucide-react";
 import { toast } from "sonner";
 import { sitesApi } from "@/api/sites";
 import { apiError, nginxOutput } from "@/api/client";
 import type { Site } from "@/api/types";
+import { useAuth } from "@/auth/AuthProvider";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { FullPageSpinner } from "@/components/ui/spinner";
+import { FullPageSpinner, Spinner } from "@/components/ui/spinner";
 
 function sslBadge(s: Site) {
   if (!s.cert) return <Badge variant="muted">未配置</Badge>;
@@ -33,8 +36,11 @@ function targetSummary(s: Site): string {
 export function Sites() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { me } = useAuth();
   const [toDelete, setToDelete] = useState<Site | null>(null);
   const [toToggle, setToToggle] = useState<Site | null>(null);
+  const [lockTarget, setLockTarget] = useState<{ site: Site; lock: boolean } | null>(null);
+  const [lockCode, setLockCode] = useState("");
 
   const { data: sites, isLoading } = useQuery({ queryKey: ["sites"], queryFn: sitesApi.list });
 
@@ -58,6 +64,20 @@ export function Sites() {
       qc.invalidateQueries({ queryKey: ["sites"] });
       toast.success("站点已删除");
       setToDelete(null);
+    },
+    onError: handleErr,
+  });
+
+  const lock = useMutation({
+    mutationFn: () =>
+      lockTarget!.lock
+        ? sitesApi.lock(lockTarget!.site.id, lockCode)
+        : sitesApi.unlock(lockTarget!.site.id, lockCode),
+    onSuccess: () => {
+      toast.success(lockTarget!.lock ? "站点已锁定" : "站点已解锁");
+      setLockTarget(null);
+      setLockCode("");
+      qc.invalidateQueries({ queryKey: ["sites"] });
     },
     onError: handleErr,
   });
@@ -100,23 +120,46 @@ export function Sites() {
                     {targetSummary(s)}
                   </TableCell>
                   <TableCell>{sslBadge(s)}</TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     {s.enabled ? <Badge variant="success">运行中</Badge> : <Badge variant="muted">已停用</Badge>}
+                    {s.locked && (
+                      <Badge variant="warning" className="ml-1.5">
+                        <Lock className="mr-1 h-3 w-3" />
+                        已锁定
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" title="编辑" onClick={() => navigate(`/app/sites/${s.id}/edit`)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
+                      {me?.systemAdmin &&
+                        (s.locked ? (
+                          <Button variant="ghost" size="icon" title="解锁（需两步验证）" onClick={() => setLockTarget({ site: s, lock: false })}>
+                            <LockOpen className="h-4 w-4 text-primary" />
+                          </Button>
+                        ) : (
+                          <Button variant="ghost" size="icon" title="锁定（需两步验证）" onClick={() => setLockTarget({ site: s, lock: true })}>
+                            <Lock className="h-4 w-4" />
+                          </Button>
+                        ))}
                       <Button
                         variant="ghost"
                         size="icon"
-                        title={s.enabled ? "停用" : "启用"}
+                        title={s.locked ? "已锁定" : s.enabled ? "停用" : "启用"}
+                        disabled={s.locked}
                         onClick={() => (s.enabled ? setToToggle(s) : toggle.mutate(s.id))}
                       >
                         <Power className={s.enabled ? "h-4 w-4 text-primary" : "h-4 w-4 text-muted-foreground"} />
                       </Button>
-                      <Button variant="ghost" size="icon" title="删除" onClick={() => setToDelete(s)}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title={s.locked ? "已锁定" : "删除"}
+                        disabled={s.locked}
+                        onClick={() => setToDelete(s)}
+                      >
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
@@ -171,6 +214,50 @@ export function Sites() {
             }}
           >
             确认停用
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <Dialog open={!!lockTarget} onOpenChange={(o) => !o && (setLockTarget(null), setLockCode(""))}>
+        <DialogHeader>
+          <DialogTitle>{lockTarget?.lock ? "锁定站点" : "解锁站点"}</DialogTitle>
+          <DialogDescription>
+            {lockTarget?.lock ? (
+              <>
+                锁定后，<span className="font-medium text-foreground">任何人（包括你自己）</span>都无法修改站点{" "}
+                <span className="font-medium text-foreground">{lockTarget?.site.name}</span> 的配置、SSL、文件或启停，直到解锁。请输入你的两步验证码确认。
+              </>
+            ) : (
+              <>
+                解锁站点 <span className="font-medium text-foreground">{lockTarget?.site.name}</span> 后将恢复编辑。请输入你的两步验证码确认。
+              </>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>两步验证码</Label>
+          <Input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            placeholder="000000"
+            className="text-center text-lg tracking-[0.4em]"
+            value={lockCode}
+            onChange={(e) => setLockCode(e.target.value.replace(/\D/g, ""))}
+            onKeyDown={(e) => e.key === "Enter" && lockCode.length === 6 && lock.mutate()}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => (setLockTarget(null), setLockCode(""))}>
+            取消
+          </Button>
+          <Button
+            variant={lockTarget?.lock ? "destructive" : "default"}
+            disabled={lock.isPending || lockCode.length !== 6}
+            onClick={() => lock.mutate()}
+          >
+            {lock.isPending && <Spinner />}
+            {lockTarget?.lock ? "确认锁定" : "确认解锁"}
           </Button>
         </DialogFooter>
       </Dialog>

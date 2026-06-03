@@ -94,7 +94,11 @@ type Site struct {
 	RawConfigOverride string `json:"rawConfigOverride"` // verbatim nginx snippet (admin only)
 	RawEdited          bool       `gorm:"not null;default:false" json:"rawEdited"` // a config file was hand-edited
 	Enabled            bool       `gorm:"not null;default:true" json:"enabled"`
-	UpdatedByUserID    *uint      `json:"updatedByUserId"`
+	// Locked freezes a site: while true, NO ONE (incl. the system admin) may edit,
+	// toggle, re-bind SSL, edit files, or delete it. Only the system admin can
+	// lock/unlock, each gated by their TOTP.
+	Locked          bool  `gorm:"not null;default:false" json:"locked"`
+	UpdatedByUserID *uint `json:"updatedByUserId"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	UpdatedAt          time.Time  `json:"updatedAt"`
 }

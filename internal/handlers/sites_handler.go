@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/xzdmycbx/nginxpanel-lite/internal/audit"
+	"github.com/xzdmycbx/nginxpanel-lite/internal/auth"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/middleware"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/models"
 )
@@ -226,6 +227,9 @@ func (h *Handler) BindSiteCert(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if siteLocked(c, site) {
+		return
+	}
 	var in bindCertReq
 	if err := c.ShouldBindJSON(&in); err != nil {
 		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
@@ -272,6 +276,69 @@ func (h *Handler) loadSite(c *gin.Context) (*models.Site, bool) {
 		return nil, false
 	}
 	return &site, true
+}
+
+// siteLocked rejects (and returns true) if the site is locked. A locked site is
+// frozen for everyone — only the system admin's lock/unlock may change it.
+func siteLocked(c *gin.Context, site *models.Site) bool {
+	if site.Locked {
+		fail(c, http.StatusForbidden, "site_locked", "站点已被系统管理员锁定，请先解锁后再操作")
+		return true
+	}
+	return false
+}
+
+type siteLockReq struct {
+	Code string `json:"code"` // system admin's TOTP, required to lock/unlock
+}
+
+// LockSite/UnlockSite freeze/unfreeze a site. System-admin only (route-gated),
+// and each requires the admin's current TOTP code.
+func (h *Handler) LockSite(c *gin.Context)   { h.setSiteLocked(c, true) }
+func (h *Handler) UnlockSite(c *gin.Context) { h.setSiteLocked(c, false) }
+
+func (h *Handler) setSiteLocked(c *gin.Context, locked bool) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	var in siteLockReq
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	rlKey := "site_lock:" + idStr(actor.ID) + ":" + c.ClientIP()
+	if okRate, retry := h.limiter.Allowed(rlKey); !okRate {
+		fail(c, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("尝试过于频繁，请 %d 秒后再试", int(retry.Seconds())+1))
+		return
+	}
+	secret, err := auth.Decrypt(h.Cfg.SecretKey, actor.TOTPSecret)
+	if err != nil || !auth.ValidateTOTP(in.Code, secret) {
+		h.limiter.Fail(rlKey)
+		fail(c, http.StatusBadRequest, "invalid_totp", "两步验证码错误")
+		return
+	}
+	h.limiter.Reset(rlKey)
+
+	site, ok := h.loadSite(c)
+	if !ok {
+		return
+	}
+	if site.Locked == locked {
+		c.JSON(http.StatusOK, h.siteView(site)) // already in target state
+		return
+	}
+	site.Locked = locked
+	if !saveOr500(c, h.DB, site) {
+		return
+	}
+	action, verb := audit.ActSiteUnlock, "解锁站点"
+	if locked {
+		action, verb = audit.ActSiteLock, "锁定站点"
+	}
+	audit.Set(c, &audit.Entry{Action: action, TargetType: audit.TargetSite, TargetID: idStr(site.ID),
+		Detail: verb + " " + site.Name})
+	c.JSON(http.StatusOK, h.siteView(site))
 }
 
 // GetSite returns one site (with bound-cert summary).
@@ -336,6 +403,9 @@ func (h *Handler) UpdateSite(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if siteLocked(c, site) {
+		return
+	}
 	var in siteReq
 	if err := c.ShouldBindJSON(&in); err != nil {
 		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
@@ -395,6 +465,9 @@ func (h *Handler) DeleteSite(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if siteLocked(c, site) {
+		return
+	}
 	if err := h.Nginx.RemoveSite(c.Request.Context(), site.ID); err != nil {
 		applyErr(c, err)
 		return
@@ -409,6 +482,9 @@ func (h *Handler) DeleteSite(c *gin.Context) {
 func (h *Handler) ToggleSite(c *gin.Context) {
 	site, ok := h.loadSite(c)
 	if !ok {
+		return
+	}
+	if siteLocked(c, site) {
 		return
 	}
 	site.Enabled = !site.Enabled
@@ -493,6 +569,9 @@ func (h *Handler) SaveSiteFile(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if siteLocked(c, site) {
+		return
+	}
 	var in rawConfigReq
 	if err := c.ShouldBindJSON(&in); err != nil {
 		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
@@ -530,6 +609,9 @@ func (h *Handler) ListSiteBackups(c *gin.Context) {
 func (h *Handler) RestoreSiteBackup(c *gin.Context) {
 	site, ok := h.loadSite(c)
 	if !ok {
+		return
+	}
+	if siteLocked(c, site) {
 		return
 	}
 	ts := c.Param("ts")

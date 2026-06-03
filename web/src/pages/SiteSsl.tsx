@@ -75,10 +75,11 @@ export function SiteSsl({ site }: { site: Site }) {
           )}
         </div>
 
-        <Button className="self-start" disabled={bind.isPending || !changed} onClick={() => bind.mutate()}>
+        <Button className="self-start" disabled={bind.isPending || !changed || site.locked} onClick={() => bind.mutate()}>
           {bind.isPending && <Spinner />}
           保存 SSL 设置
         </Button>
+        {site.locked && <p className="text-xs text-amber-700">站点已锁定，无法修改 SSL，请先由系统管理员解锁。</p>}
       </CardContent>
     </Card>
   );

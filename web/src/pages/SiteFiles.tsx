@@ -96,9 +96,9 @@ export function SiteFiles({ site }: { site: Site }) {
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setEditKey(null)}>取消</Button>
-          <Button disabled={saving || loading} onClick={save}>
+          <Button disabled={saving || loading || site.locked} onClick={save}>
             {saving && <Spinner />}
-            保存并重载
+            {site.locked ? "站点已锁定" : "保存并重载"}
           </Button>
         </DialogFooter>
       </Dialog>

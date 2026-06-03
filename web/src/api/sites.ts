@@ -43,6 +43,8 @@ export const sitesApi = {
     api.post<{ current: string; generated: string }>(`/sites/${id}/preview`).then((r) => r.data),
   bindCert: (id: number | string, certId: number | null) =>
     api.post<Site>(`/sites/${id}/cert`, { certId }).then((r) => r.data),
+  lock: (id: number | string, code: string) => api.post<Site>(`/sites/${id}/lock`, { code }).then((r) => r.data),
+  unlock: (id: number | string, code: string) => api.post<Site>(`/sites/${id}/unlock`, { code }).then((r) => r.data),
   backups: (id: number | string) => api.get<{ items: Backup[] }>(`/sites/${id}/backups`).then((r) => r.data.items),
   restore: (id: number | string, ts: string) => api.post(`/sites/${id}/backups/${ts}/restore`),
 };

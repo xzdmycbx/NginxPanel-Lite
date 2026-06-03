@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, X, FileCode, Trash2, Database, Network, ShieldCheck, ScrollText } from "lucide-react";
+import { ArrowLeft, Plus, X, FileCode, Trash2, Database, Network, ShieldCheck, ScrollText, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { sitesApi, type SiteInput } from "@/api/sites";
 import { apiError, nginxOutput } from "@/api/client";
@@ -141,6 +141,7 @@ export function SiteForm() {
 
   const currentForm: FormState = { name, domains, redirect, rawOverride, locations };
   const dirty = isEdit && loadedId !== null && JSON.stringify(currentForm) !== baseline;
+  const locked = !!site?.locked;
 
   // 有未保存改动时，拦截关闭标签页 / 刷新。
   useEffect(() => {
@@ -257,6 +258,13 @@ export function SiteForm() {
       </div>
 
       {isEdit && site && <TabsBar value={tab} onChange={setTab} items={tabItems} />}
+
+      {locked && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <Lock className="h-4 w-4 shrink-0" />
+          此站点已被系统管理员锁定，无法修改配置 / SSL / 文件，请联系系统管理员解锁后再操作。
+        </div>
+      )}
 
       {/* 代理配置：基本信息 + 反向代理路径 + 高级，同属一个表单，统一保存 */}
       {(!isEdit || tab === "config") && (
@@ -407,7 +415,7 @@ export function SiteForm() {
             ) : (
               <span />
             )}
-            <Button onClick={handleSave} disabled={submitting}>
+            <Button onClick={handleSave} disabled={submitting || locked}>
               {submitting && <Spinner />}
               {isEdit ? "保存修改" : "创建站点"}
             </Button>
@@ -440,7 +448,7 @@ export function SiteForm() {
             取消
           </Button>
           <Button
-            disabled={submitting}
+            disabled={submitting || locked}
             onClick={() => {
               setConfirmSave(false);
               onSubmit();

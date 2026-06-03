@@ -62,6 +62,7 @@ func Mount(r *gin.Engine, h *handlers.Handler, a *middleware.Auth, rec *audit.Re
 	authed.GET("/certs", h.ListCerts)
 	authed.POST("/certs/manual", h.CreateManualCert)
 	authed.POST("/certs/acme", h.IssueACMECert)
+	authed.PUT("/certs/:id", h.UpdateCert)
 	authed.POST("/certs/:id/renew", h.RenewCert)
 	authed.DELETE("/certs/:id", h.DeleteCert)
 
@@ -80,6 +81,8 @@ func Mount(r *gin.Engine, h *handlers.Handler, a *middleware.Auth, rec *audit.Re
 	sysadmin.Use(a.RequireSystemAdmin())
 	sysadmin.POST("/users/:id/disable", h.DisableUser)
 	sysadmin.POST("/users/:id/enable", h.EnableUser)
+	sysadmin.POST("/sites/:id/lock", h.LockSite)     // requires the admin's TOTP
+	sysadmin.POST("/sites/:id/unlock", h.UnlockSite) // requires the admin's TOTP
 
 	admin.PUT("/sites/:id/file", h.SaveSiteFile)
 	admin.POST("/sites/:id/backups/:ts/restore", h.RestoreSiteBackup)
