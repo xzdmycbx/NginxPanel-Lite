@@ -30,6 +30,8 @@ func (h *Handler) SiteLogs(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "internal", "读取日志失败")
 		return
 	}
+	audit.Set(c, &audit.Entry{Action: audit.ActSiteLogView, TargetType: audit.TargetSite, TargetID: idStr(site.ID),
+		Detail: "查看站点日志 " + site.Name + "（" + kind + "）"})
 	c.JSON(http.StatusOK, gin.H{"type": kind, "lines": out})
 }
 

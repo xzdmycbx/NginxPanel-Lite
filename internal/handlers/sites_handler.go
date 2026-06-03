@@ -385,11 +385,14 @@ func (h *Handler) GetSiteFile(c *gin.Context) {
 	if !ok {
 		return
 	}
-	content, err := h.Nginx.GetSiteFile(site.ID, c.Query("key"))
+	key := c.Query("key")
+	content, err := h.Nginx.GetSiteFile(site.ID, key)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	audit.Set(c, &audit.Entry{Action: audit.ActSiteFileView, TargetType: audit.TargetSite, TargetID: idStr(site.ID),
+		Detail: "查看配置文件 " + site.Name + "（" + key + "）"})
 	c.JSON(http.StatusOK, gin.H{"content": content})
 }
 

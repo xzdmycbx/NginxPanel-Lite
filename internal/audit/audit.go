@@ -42,6 +42,8 @@ const (
 	ActSiteRawEdit     = "site.raw_edit"
 	ActSiteRestore     = "site.restore"
 	ActSiteFileEdit    = "site.file_edit"
+	ActSiteFileView    = "site.file_view"
+	ActSiteLogView     = "site.log_view"
 	ActSiteLogClear    = "site.log_clear"
 	ActSSLManual       = "ssl.manual"
 	ActSSLACMEIssue    = "ssl.acme_issue"
