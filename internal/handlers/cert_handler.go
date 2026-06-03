@@ -1,17 +1,23 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"github.com/xzdmycbx/nginxpanel-lite/internal/audit"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/models"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/ssl"
 )
+
+// errCertInUse signals a cert can't be deleted because a site references it
+// (checked inside the delete transaction to avoid a bind/delete race).
+var errCertInUse = errors.New("certificate in use")
 
 type certView struct {
 	ID            uint              `json:"id"`
@@ -274,7 +280,10 @@ func (h *Handler) UpdateCert(c *gin.Context) {
 		return
 	}
 	if contentChanged {
-		_ = h.Nginx.Reload(c.Request.Context()) // sync every site using this cert
+		if err := h.Nginx.Reload(c.Request.Context()); err != nil { // sync every site using this cert
+			applyErr(c, err)
+			return
+		}
 	}
 	audit.Set(c, &audit.Entry{Action: audit.ActCertUpdate, TargetType: audit.TargetCert, TargetID: idStr(cert.ID),
 		Detail: "修改证书 " + cert.Name})
@@ -307,7 +316,10 @@ func (h *Handler) RenewCert(c *gin.Context) {
 	if !saveOr500(c, h.DB, &cert) {
 		return
 	}
-	_ = h.Nginx.Reload(c.Request.Context())
+	if err := h.Nginx.Reload(c.Request.Context()); err != nil {
+		applyErr(c, err)
+		return
+	}
 	audit.Set(c, &audit.Entry{Action: audit.ActCertRenew, TargetType: audit.TargetCert, TargetID: idStr(cert.ID),
 		Detail: "续期证书成功 " + cert.Name + "，有效期至 " + info.NotAfter.Format("2006-01-02")})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -320,13 +332,27 @@ func (h *Handler) DeleteCert(c *gin.Context) {
 		fail(c, http.StatusNotFound, "not_found", "证书不存在")
 		return
 	}
-	var inUse int64
-	h.DB.Model(&models.Site{}).Where("cert_id = ?", cert.ID).Count(&inUse)
-	if inUse > 0 {
+	// Check usage and delete atomically: with the single SQLite connection the
+	// transaction serializes against a concurrent BindSiteCert, preventing a
+	// dangling cert_id / orphaned files.
+	err := h.DB.Transaction(func(tx *gorm.DB) error {
+		var inUse int64
+		if err := tx.Model(&models.Site{}).Where("cert_id = ?", cert.ID).Count(&inUse).Error; err != nil {
+			return err
+		}
+		if inUse > 0 {
+			return errCertInUse
+		}
+		return tx.Delete(&cert).Error
+	})
+	if errors.Is(err, errCertInUse) {
 		fail(c, http.StatusConflict, "cert_in_use", "该证书正被站点使用，请先在相关站点解绑后再删除")
 		return
 	}
-	h.DB.Delete(&cert)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "internal", "删除证书失败")
+		return
+	}
 	_ = os.RemoveAll(ssl.CertDir(h.Cfg.CertsDir, cert.ID))
 	audit.Set(c, &audit.Entry{Action: audit.ActCertDelete, TargetType: audit.TargetCert, TargetID: idStr(cert.ID),
 		Detail: "删除证书 " + cert.Name})
