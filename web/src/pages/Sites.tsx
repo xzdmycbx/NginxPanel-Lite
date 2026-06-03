@@ -33,6 +33,7 @@ export function Sites() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [toDelete, setToDelete] = useState<Site | null>(null);
+  const [toToggle, setToToggle] = useState<Site | null>(null);
 
   const { data: sites, isLoading } = useQuery({ queryKey: ["sites"], queryFn: sitesApi.list });
 
@@ -110,7 +111,7 @@ export function Sites() {
                         variant="ghost"
                         size="icon"
                         title={s.enabled ? "停用" : "启用"}
-                        onClick={() => toggle.mutate(s.id)}
+                        onClick={() => (s.enabled ? setToToggle(s) : toggle.mutate(s.id))}
                       >
                         <Power className={s.enabled ? "h-4 w-4 text-primary" : "h-4 w-4 text-muted-foreground"} />
                       </Button>
@@ -145,6 +146,30 @@ export function Sites() {
           </Button>
           <Button variant="destructive" disabled={remove.isPending} onClick={() => toDelete && remove.mutate(toDelete.id)}>
             确认删除
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <Dialog open={!!toToggle} onOpenChange={(o) => !o && setToToggle(null)}>
+        <DialogHeader>
+          <DialogTitle>停用站点</DialogTitle>
+          <DialogDescription>
+            确定停用站点 <span className="font-medium text-foreground">{toToggle?.name}</span> 吗？停用后会移除其 nginx 配置，该域名将无法访问（可随时重新启用）。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setToToggle(null)}>
+            取消
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={toggle.isPending}
+            onClick={() => {
+              if (toToggle) toggle.mutate(toToggle.id);
+              setToToggle(null);
+            }}
+          >
+            确认停用
           </Button>
         </DialogFooter>
       </Dialog>

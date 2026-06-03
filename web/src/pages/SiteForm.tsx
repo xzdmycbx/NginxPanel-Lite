@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { FullPageSpinner, Spinner } from "@/components/ui/spinner";
 import { TabsBar, type TabItem } from "@/components/ui/tabs";
 import { useAuth } from "@/auth/AuthProvider";
@@ -73,6 +73,11 @@ function initialFromSite(site: Site): FormState {
   };
 }
 
+// 反向代理目标签名：每个 location 的「路径 + 目标列表」，用于判断保存是否改了代理去向
+function proxyTargetsSig(locs: LocState[]): string {
+  return JSON.stringify(locs.map((l) => [l.path.trim() || "/", l.upstreams.map((u) => u.trim()).filter(Boolean)]));
+}
+
 export function SiteForm() {
   const { id } = useParams();
   const isEdit = !!id;
@@ -83,6 +88,9 @@ export function SiteForm() {
   const [preview, setPreview] = useState<{ current: string; generated: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [tab, setTab] = useState<SiteTab>("config");
+  const [loadedId, setLoadedId] = useState<number | null>(null);
+  const [baseline, setBaseline] = useState("");
+  const [confirmSave, setConfirmSave] = useState(false);
 
   const { data: site, isLoading } = useQuery({
     queryKey: ["site", id],
@@ -96,16 +104,43 @@ export function SiteForm() {
   const [rawOverride, setRawOverride] = useState("");
   const [locations, setLocations] = useState<LocState[]>([emptyLoc()]);
 
+  // 用服务端数据填充表单。仅在首次加载或切换到不同站点时回灌；同一站点的后台
+  // 重新拉取（断网重连 / 缓存失效）不得覆盖未保存草稿，故按 site.id 设门、保存后再重置基线。
+  function applyServerState(s: Site) {
+    const init = initialFromSite(s);
+    setName(init.name);
+    setDomains(init.domains);
+    setRedirect(init.redirect);
+    setRawOverride(init.rawOverride);
+    setLocations(init.locations);
+    setBaseline(JSON.stringify(init));
+    setLoadedId(s.id);
+  }
+
   useEffect(() => {
-    if (site) {
-      const init = initialFromSite(site);
-      setName(init.name);
-      setDomains(init.domains);
-      setRedirect(init.redirect);
-      setRawOverride(init.rawOverride);
-      setLocations(init.locations);
-    }
-  }, [site]);
+    if (site && loadedId !== site.id) applyServerState(site);
+  }, [site, loadedId]);
+
+  const currentForm: FormState = { name, domains, redirect, rawOverride, locations };
+  const dirty = isEdit && loadedId !== null && JSON.stringify(currentForm) !== baseline;
+
+  // 有未保存改动时，拦截关闭标签页 / 刷新。
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  // 反向代理目标是否相对加载时发生变化——用于保存前的二次确认（proxy_pass 改向会引流到新后端）。
+  const targetsChanged =
+    isEdit &&
+    loadedId !== null &&
+    baseline !== "" &&
+    proxyTargetsSig(locations) !== proxyTargetsSig((JSON.parse(baseline) as FormState).locations);
 
   // --- domain helpers ---
   const setDomain = (i: number, v: string) => setDomains((d) => d.map((x, idx) => (idx === i ? v : x)));
@@ -146,7 +181,8 @@ export function SiteForm() {
     setSubmitting(true);
     try {
       if (isEdit) {
-        await sitesApi.update(id!, body);
+        const saved = await sitesApi.update(id!, body);
+        applyServerState(saved); // 以保存后的服务端值重置基线，红点 / 拦截随之清除
         toast.success("站点已更新");
         qc.invalidateQueries({ queryKey: ["sites"] });
         qc.invalidateQueries({ queryKey: ["site", id] });
@@ -171,14 +207,16 @@ export function SiteForm() {
     }
   }
 
-  if (isEdit && isLoading) return <FullPageSpinner />;
+  function handleSave() {
+    // 改了反向代理去向属高影响操作，先二次确认。
+    if (isEdit && targetsChanged) {
+      setConfirmSave(true);
+      return;
+    }
+    onSubmit();
+  }
 
-  // 「未保存改动」检测：当前表单与从站点加载的基线不一致即为脏
-  const dirty =
-    isEdit &&
-    !!site &&
-    JSON.stringify({ name, domains, redirect, rawOverride, locations } satisfies FormState) !==
-      JSON.stringify(initialFromSite(site));
+  if (isEdit && isLoading) return <FullPageSpinner />;
 
   const tabItems: TabItem<SiteTab>[] = [
     { value: "config", label: "代理配置", icon: Network, dot: dirty, dotTitle: "有未保存的配置改动" },
@@ -350,7 +388,7 @@ export function SiteForm() {
             ) : (
               <span />
             )}
-            <Button onClick={onSubmit} disabled={submitting}>
+            <Button onClick={handleSave} disabled={submitting}>
               {submitting && <Spinner />}
               {isEdit ? "保存修改" : "创建站点"}
             </Button>
@@ -369,6 +407,30 @@ export function SiteForm() {
           <DialogTitle>生成的 nginx 配置</DialogTitle>
         </DialogHeader>
         <pre className="max-h-[60vh] overflow-auto rounded-lg bg-muted p-4 text-xs leading-relaxed">{preview?.generated}</pre>
+      </Dialog>
+
+      <Dialog open={confirmSave} onOpenChange={setConfirmSave}>
+        <DialogHeader>
+          <DialogTitle>确认修改反向代理目标</DialogTitle>
+          <DialogDescription>
+            你修改了反向代理目标（proxy_pass）。保存后该站点的流量会被转发到新的后端地址，请确认目标无误。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmSave(false)}>
+            取消
+          </Button>
+          <Button
+            disabled={submitting}
+            onClick={() => {
+              setConfirmSave(false);
+              onSubmit();
+            }}
+          >
+            {submitting && <Spinner />}
+            确认保存
+          </Button>
+        </DialogFooter>
       </Dialog>
     </div>
   );

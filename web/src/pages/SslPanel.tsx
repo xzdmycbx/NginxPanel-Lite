@@ -13,6 +13,7 @@ import { Select } from "@/components/ui/select";
 import { Segmented } from "@/components/ui/segmented";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Dialog, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 
 export function SslPanel({ site }: { site: Site }) {
@@ -22,6 +23,7 @@ export function SslPanel({ site }: { site: Site }) {
   const [keyPem, setKeyPem] = useState("");
   const [email, setEmail] = useState(site.acmeEmail ?? "");
   const [env, setEnv] = useState(site.acmeEnv || "staging");
+  const [confirmDisable, setConfirmDisable] = useState(false);
 
   const { data: info } = useQuery({ queryKey: ["ssl", site.id], queryFn: () => sitesApi.ssl(site.id) });
 
@@ -167,12 +169,36 @@ export function SslPanel({ site }: { site: Site }) {
         )}
 
         {mode === "none" && site.sslMode !== "none" && (
-          <Button variant="outline" className="self-start" disabled={busy} onClick={() => disable.mutate()}>
+          <Button variant="outline" className="self-start" disabled={busy} onClick={() => setConfirmDisable(true)}>
             {disable.isPending && <Spinner />}
             关闭 SSL
           </Button>
         )}
       </CardContent>
+
+      <Dialog open={confirmDisable} onOpenChange={setConfirmDisable}>
+        <DialogHeader>
+          <DialogTitle>关闭 SSL</DialogTitle>
+          <DialogDescription>
+            确定关闭该站点的 HTTPS 吗？关闭后将仅通过 HTTP 提供服务（证书文件保留在磁盘，可重新启用）。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmDisable(false)}>
+            取消
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={busy}
+            onClick={() => {
+              setConfirmDisable(false);
+              disable.mutate();
+            }}
+          >
+            确认关闭
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </Card>
   );
 }
