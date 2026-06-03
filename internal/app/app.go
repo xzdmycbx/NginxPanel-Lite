@@ -89,7 +89,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(middleware.RequestID(), gin.Recovery(), gin.Logger())
+	r.Use(middleware.RequestID(), middleware.NoIndex(), gin.Recovery(), gin.Logger())
 	router.Mount(r, h, authMw, rec)
 	r.NoRoute(web.SPAHandler())
 

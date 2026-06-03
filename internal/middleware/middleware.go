@@ -36,6 +36,16 @@ func RequestID() gin.HandlerFunc {
 	}
 }
 
+// NoIndex tells search engines not to index/cache any response. This is a
+// private, auth-gated admin panel; applied globally so it also covers the SPA
+// shell and static assets (the HTML meta robots tag is a second layer).
+func NoIndex() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Robots-Tag", "noindex, nofollow, noarchive")
+		c.Next()
+	}
+}
+
 // SetSession writes the session JWT into an httpOnly cookie.
 func (a *Auth) SetSession(c *gin.Context, token string, ttl time.Duration) {
 	c.SetSameSite(http.SameSiteStrictMode)
