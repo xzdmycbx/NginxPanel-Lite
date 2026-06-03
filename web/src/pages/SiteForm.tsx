@@ -17,7 +17,7 @@ import { Dialog, DialogHeader, DialogTitle, DialogDescription, DialogFooter } fr
 import { FullPageSpinner, Spinner } from "@/components/ui/spinner";
 import { TabsBar, type TabItem } from "@/components/ui/tabs";
 import { useAuth } from "@/auth/AuthProvider";
-import { SslPanel } from "./SslPanel";
+import { SiteSsl } from "./SiteSsl";
 import { SiteFiles } from "./SiteFiles";
 import { SiteLogs } from "./SiteLogs";
 
@@ -417,7 +417,7 @@ export function SiteForm() {
         </>
       )}
 
-      {isEdit && site && tab === "ssl" && <SslPanel site={site} />}
+      {isEdit && site && tab === "ssl" && <SiteSsl site={site} />}
       {isEdit && site && tab === "logs" && <SiteLogs site={site} />}
       {isEdit && site && isAdmin && tab === "files" && <SiteFiles site={site} />}
 

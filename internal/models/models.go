@@ -19,6 +19,34 @@ const (
 	SSLACME   SSLMode = "acme"
 )
 
+// CertSource is how a global certificate was obtained.
+type CertSource string
+
+const (
+	CertManual CertSource = "manual" // uploaded PEM pair
+	CertACME   CertSource = "acme"   // issued/renewed via Let's Encrypt
+)
+
+// Certificate is a named TLS certificate managed on the global SSL page and
+// referenced by sites. Decoupling certs from sites lets one cert serve many
+// sites and be managed (upload / issue / renew) in one place.
+type Certificate struct {
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	Name          string     `gorm:"uniqueIndex;not null" json:"name"`
+	Source        CertSource `gorm:"not null" json:"source"`
+	Domains       []string   `gorm:"serializer:json" json:"domains"`
+	CertPath      string     `json:"-"` // on-disk fullchain (panel + nginx shared volume)
+	KeyPath       string     `json:"-"`
+	NotAfter      *time.Time `json:"notAfter"`
+	Issuer        string     `json:"issuer"`
+	ACMEEmail     string     `json:"acmeEmail"`     // acme only
+	ACMEEnv       string     `json:"acmeEnv"`       // "staging" | "production"
+	LastRenewedAt *time.Time `json:"lastRenewedAt"` // acme only
+	RenewError    string     `json:"renewError"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+}
+
 // ProxyLocation is one nginx location block within a site: a custom path that
 // reverse-proxies to one or more upstreams, with per-location options.
 type ProxyLocation struct {
@@ -31,13 +59,20 @@ type ProxyLocation struct {
 
 // User is a panel account. Username is immutable after creation (no route mutates it).
 type User struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Username     string    `gorm:"uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"not null" json:"-"`
-	Role         Role      `gorm:"not null;default:user" json:"role"`
-	TOTPSecret   string    `gorm:"" json:"-"` // AES-GCM encrypted base32 secret
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	Username string `gorm:"uniqueIndex;not null" json:"username"`
+	PasswordHash string `gorm:"not null" json:"-"`
+	Role         Role   `gorm:"not null;default:user" json:"role"`
+	// SystemAdmin is the single super-admin created at setup: it can manage every
+	// other admin/user (reset password/TOTP, disable). Only one exists unless the
+	// DB is edited by hand. A regular admin (Role=admin, SystemAdmin=false) may
+	// only manage Role=user accounts.
+	SystemAdmin  bool      `gorm:"not null;default:false" json:"systemAdmin"`
+	Disabled     bool      `gorm:"not null;default:false" json:"disabled"` // a disabled account cannot log in
+	TOTPSecret   string    `gorm:"" json:"-"`                              // AES-GCM encrypted base32 secret
+	TOTPPending  string    `gorm:"" json:"-"`                              // encrypted pending secret during a self re-bind
 	TOTPEnabled  bool      `gorm:"not null;default:false" json:"totpEnabled"`
-	TokenEpoch   int       `gorm:"not null;default:0" json:"-"` // bumped on password change/reset to revoke sessions
+	TokenEpoch   int       `gorm:"not null;default:0" json:"-"` // bumped on password change/reset/disable to revoke sessions
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
@@ -51,15 +86,12 @@ type Site struct {
 	UpstreamTargets    []string        `gorm:"serializer:json" json:"upstreamTargets"` // legacy single-location fallback
 	WebsocketUpgrade   bool            `gorm:"not null;default:false" json:"websocketUpgrade"`
 	ForceHTTPSRedirect bool            `gorm:"not null;default:true" json:"forceHttpsRedirect"`
-	SSLMode            SSLMode    `gorm:"not null;default:none" json:"sslMode"`
-	CertNotAfter       *time.Time `json:"certNotAfter"`
-	LastRenewedAt      *time.Time `json:"lastRenewedAt"`
-	ACMEEmail          string     `json:"acmeEmail"`
-	ACMEEnv            string     `json:"acmeEnv"` // "staging" | "production"
-	RenewError         string     `json:"renewError"`
-	CertPath           string     `json:"certPath"` // resolved fullchain path for nginx
-	KeyPath            string     `json:"keyPath"`
-	RawConfigOverride  string     `json:"rawConfigOverride"` // verbatim nginx snippet (admin only)
+	// CertID references a global Certificate; nil means no TLS. CertPath/KeyPath
+	// are the resolved on-disk paths (denormalized from the cert) that nginx uses.
+	CertID            *uint  `json:"certId"`
+	CertPath          string `json:"-"`
+	KeyPath           string `json:"-"`
+	RawConfigOverride string `json:"rawConfigOverride"` // verbatim nginx snippet (admin only)
 	RawEdited          bool       `gorm:"not null;default:false" json:"rawEdited"` // a config file was hand-edited
 	Enabled            bool       `gorm:"not null;default:true" json:"enabled"`
 	UpdatedByUserID    *uint      `json:"updatedByUserId"`
@@ -108,5 +140,5 @@ type Setting struct {
 
 // All returns every model for AutoMigrate.
 func All() []any {
-	return []any{&User{}, &Site{}, &AuditLog{}, &Setting{}}
+	return []any{&User{}, &Site{}, &Certificate{}, &AuditLog{}, &Setting{}}
 }

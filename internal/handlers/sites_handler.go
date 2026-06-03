@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -164,14 +165,104 @@ func summarizeSite(s *models.Site) string {
 }
 
 func enableTLSFor(s *models.Site) bool {
-	return s.SSLMode != models.SSLNone && s.CertPath != "" && s.KeyPath != ""
+	return s.CertID != nil && s.CertPath != "" && s.KeyPath != ""
 }
 
-// ListSites returns all sites.
+// certBrief is the cert summary embedded in a site response (badge / expiry).
+type certBrief struct {
+	ID       uint              `json:"id"`
+	Name     string            `json:"name"`
+	Source   models.CertSource `json:"source"`
+	NotAfter *time.Time        `json:"notAfter"`
+	DaysLeft *int              `json:"daysLeft"`
+}
+
+type siteView struct {
+	models.Site
+	Cert *certBrief `json:"cert"`
+}
+
+func (h *Handler) siteView(s *models.Site) siteView {
+	v := siteView{Site: *s}
+	if s.CertID != nil {
+		var cert models.Certificate
+		if err := h.DB.First(&cert, *s.CertID).Error; err == nil {
+			b := &certBrief{ID: cert.ID, Name: cert.Name, Source: cert.Source, NotAfter: cert.NotAfter}
+			if cert.NotAfter != nil {
+				d := int(time.Until(*cert.NotAfter).Hours() / 24)
+				b.DaysLeft = &d
+			}
+			v.Cert = b
+		}
+	}
+	return v
+}
+
+// bindCert resolves certID to a Certificate and denormalizes its on-disk paths
+// onto the site (nil clears the binding -> no TLS).
+func (h *Handler) bindCert(site *models.Site, certID *uint) error {
+	if certID == nil {
+		site.CertID = nil
+		site.CertPath, site.KeyPath = "", ""
+		return nil
+	}
+	var cert models.Certificate
+	if err := h.DB.First(&cert, *certID).Error; err != nil {
+		return fmt.Errorf("所选证书不存在")
+	}
+	site.CertID = &cert.ID
+	site.CertPath, site.KeyPath = cert.CertPath, cert.KeyPath
+	return nil
+}
+
+type bindCertReq struct {
+	CertID *uint `json:"certId"`
+}
+
+// BindSiteCert binds (or clears, certId=null) a global cert to a site and
+// re-applies its nginx config.
+func (h *Handler) BindSiteCert(c *gin.Context) {
+	site, ok := h.loadSite(c)
+	if !ok {
+		return
+	}
+	var in bindCertReq
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	if err := h.bindCert(site, in.CertID); err != nil {
+		fail(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	site.RawEdited = false // re-render overwrites manual edits
+	if site.Enabled {
+		if err := h.Nginx.ApplySite(c.Request.Context(), site, enableTLSFor(site)); err != nil {
+			applyErr(c, err)
+			return
+		}
+	}
+	if !saveOr500(c, h.DB, site) {
+		return
+	}
+	detail := "解绑 SSL 证书 " + site.Name
+	if site.CertID != nil {
+		detail = "绑定 SSL 证书 " + site.Name
+	}
+	audit.Set(c, &audit.Entry{Action: audit.ActSiteBindCert, TargetType: audit.TargetSite, TargetID: idStr(site.ID),
+		Detail: detail})
+	c.JSON(http.StatusOK, h.siteView(site))
+}
+
+// ListSites returns all sites (with bound-cert summary).
 func (h *Handler) ListSites(c *gin.Context) {
 	var sites []models.Site
 	h.DB.Order("id asc").Find(&sites)
-	c.JSON(http.StatusOK, gin.H{"items": sites})
+	out := make([]siteView, 0, len(sites))
+	for i := range sites {
+		out = append(out, h.siteView(&sites[i]))
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
 }
 
 func (h *Handler) loadSite(c *gin.Context) (*models.Site, bool) {
@@ -183,13 +274,13 @@ func (h *Handler) loadSite(c *gin.Context) (*models.Site, bool) {
 	return &site, true
 }
 
-// GetSite returns one site.
+// GetSite returns one site (with bound-cert summary).
 func (h *Handler) GetSite(c *gin.Context) {
 	site, ok := h.loadSite(c)
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, site)
+	c.JSON(http.StatusOK, h.siteView(site))
 }
 
 // CreateSite creates a reverse-proxy site and applies its config.
@@ -220,7 +311,6 @@ func (h *Handler) CreateSite(c *gin.Context) {
 		Locations:          locs,
 		ForceHTTPSRedirect: in.ForceHTTPSRedirect,
 		RawConfigOverride:  raw,
-		SSLMode:            models.SSLNone,
 		Enabled:            true,
 		UpdatedByUserID:    &uid,
 	}
@@ -228,6 +318,7 @@ func (h *Handler) CreateSite(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "internal", "保存站点失败")
 		return
 	}
+	// New sites have no certificate; SSL is bound later from the site SSL tab.
 	if err := h.Nginx.ApplySite(c.Request.Context(), &site, false); err != nil {
 		h.DB.Delete(&site) // keep DB and nginx consistent
 		applyErr(c, err)
@@ -235,7 +326,7 @@ func (h *Handler) CreateSite(c *gin.Context) {
 	}
 	audit.Set(c, &audit.Entry{Action: audit.ActSiteCreate, TargetType: audit.TargetSite, TargetID: idStr(site.ID),
 		Detail: "创建站点 " + strings.Join(site.ServerNames, ", ")})
-	c.JSON(http.StatusOK, site)
+	c.JSON(http.StatusOK, h.siteView(&site))
 }
 
 // UpdateSite updates a site and re-applies its config.
@@ -295,7 +386,7 @@ func (h *Handler) UpdateSite(c *gin.Context) {
 	after := summarizeSite(site)
 	audit.Set(c, &audit.Entry{Action: audit.ActSiteUpdate, TargetType: audit.TargetSite, TargetID: idStr(site.ID),
 		Detail: "修改站点 " + site.Name + "：" + before + " ⇒ " + after})
-	c.JSON(http.StatusOK, site)
+	c.JSON(http.StatusOK, h.siteView(site))
 }
 
 // DeleteSite removes a site and its nginx config.

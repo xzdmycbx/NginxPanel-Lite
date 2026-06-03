@@ -3,13 +3,16 @@
 package database
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
 	"github.com/xzdmycbx/nginxpanel-lite/internal/models"
+	"github.com/xzdmycbx/nginxpanel-lite/internal/ssl"
 )
 
 const SettingFirstRun = "first_run"
@@ -33,9 +36,81 @@ func Open(path string) (*gorm.DB, error) {
 	return db, nil
 }
 
-// Migrate runs AutoMigrate over all models.
+// Migrate runs AutoMigrate over all models, then backfills the system admin and
+// converts legacy per-site certificates for databases created before those
+// fields existed.
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(models.All()...)
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		return err
+	}
+	if err := backfillSystemAdmin(db); err != nil {
+		return err
+	}
+	return backfillCerts(db)
+}
+
+// backfillCerts converts legacy per-site certificates (older schema) into named
+// global Certificate records and binds the site to them. Best-effort: a fresh DB
+// has no legacy ssl_mode column and is skipped.
+func backfillCerts(db *gorm.DB) error {
+	type legacy struct {
+		ID        uint
+		SSLMode   string
+		CertPath  string
+		KeyPath   string
+		ACMEEmail string
+		ACMEEnv   string
+	}
+	var rows []legacy
+	if err := db.Table("sites").
+		Where("cert_id IS NULL AND ssl_mode IS NOT NULL AND ssl_mode != 'none' AND cert_path != ''").
+		Find(&rows).Error; err != nil {
+		return nil // legacy columns absent (fresh DB) — nothing to migrate
+	}
+	for _, r := range rows {
+		b, err := os.ReadFile(r.CertPath)
+		if err != nil {
+			continue // cert file gone — leave the site without TLS
+		}
+		info, err := ssl.ParseCertInfo(b)
+		if err != nil {
+			continue
+		}
+		source := models.CertManual
+		if r.SSLMode == string(models.CertACME) {
+			source = models.CertACME
+		}
+		cert := models.Certificate{
+			Name: fmt.Sprintf("站点%d-旧证书", r.ID), Source: source, Domains: info.Domains,
+			CertPath: r.CertPath, KeyPath: r.KeyPath, NotAfter: &info.NotAfter, Issuer: info.Issuer,
+			ACMEEmail: r.ACMEEmail, ACMEEnv: r.ACMEEnv,
+		}
+		if err := db.Create(&cert).Error; err != nil {
+			continue
+		}
+		db.Table("sites").Where("id = ?", r.ID).Update("cert_id", cert.ID)
+	}
+	return nil
+}
+
+// backfillSystemAdmin promotes the earliest admin to system admin if none is
+// marked yet (older DBs). Fresh installs have no admin here — Setup marks it.
+func backfillSystemAdmin(db *gorm.DB) error {
+	var marked int64
+	if err := db.Model(&models.User{}).Where("system_admin = ?", true).Count(&marked).Error; err != nil {
+		return err
+	}
+	if marked > 0 {
+		return nil
+	}
+	var first models.User
+	if err := db.Where("role = ?", models.RoleAdmin).Order("id asc").First(&first).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // fresh install, no admin yet
+		}
+		return err
+	}
+	return db.Model(&first).Update("system_admin", true).Error
 }
 
 // SeedSettings ensures the first_run flag exists (defaults to "true").

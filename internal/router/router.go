@@ -40,6 +40,8 @@ func Mount(r *gin.Engine, h *handlers.Handler, a *middleware.Auth, rec *audit.Re
 	authed.Use(a.RequireAuth())
 	authed.POST("/auth/logout", h.Logout)
 	authed.PUT("/me/password", h.ChangeOwnPassword)
+	authed.POST("/me/totp/reset/init", h.SelfResetTOTPInit)
+	authed.POST("/me/totp/reset/confirm", h.SelfResetTOTPConfirm)
 	authed.GET("/logs", h.ListLogs)
 
 	authed.GET("/sites", h.ListSites)
@@ -54,11 +56,14 @@ func Mount(r *gin.Engine, h *handlers.Handler, a *middleware.Auth, rec *audit.Re
 	authed.GET("/sites/:id/backups", h.ListSiteBackups)
 	authed.GET("/sites/:id/logs", h.SiteLogs)
 
-	authed.GET("/sites/:id/ssl", h.GetSSL)
-	authed.POST("/sites/:id/ssl/manual", h.ManualSSL)
-	authed.POST("/sites/:id/ssl/acme", h.ACMESSL)
-	authed.POST("/sites/:id/ssl/renew", h.RenewSSL)
-	authed.DELETE("/sites/:id/ssl", h.DisableSSL)
+	authed.POST("/sites/:id/cert", h.BindSiteCert) // bind/clear a global cert
+
+	// Global certificate store (manual upload + ACME issuance/renewal).
+	authed.GET("/certs", h.ListCerts)
+	authed.POST("/certs/manual", h.CreateManualCert)
+	authed.POST("/certs/acme", h.IssueACMECert)
+	authed.POST("/certs/:id/renew", h.RenewCert)
+	authed.DELETE("/certs/:id", h.DeleteCert)
 
 	// Admin-only: user management + raw nginx config editing (raw config can
 	// expose key files / static dirs that `nginx -t` cannot catch semantically).
@@ -69,6 +74,12 @@ func Mount(r *gin.Engine, h *handlers.Handler, a *middleware.Auth, rec *audit.Re
 	admin.PUT("/users/:id/password", h.AdminSetPassword)
 	admin.POST("/users/:id/totp/reset", h.AdminResetTOTP)
 	admin.DELETE("/users/:id", h.DeleteUser)
+
+	// System-admin only: enabling/disabling accounts.
+	sysadmin := authed.Group("")
+	sysadmin.Use(a.RequireSystemAdmin())
+	sysadmin.POST("/users/:id/disable", h.DisableUser)
+	sysadmin.POST("/users/:id/enable", h.EnableUser)
 
 	admin.PUT("/sites/:id/file", h.SaveSiteFile)
 	admin.POST("/sites/:id/backups/:ts/restore", h.RestoreSiteBackup)

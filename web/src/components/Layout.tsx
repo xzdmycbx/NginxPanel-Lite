@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Globe, ScrollText, Users, KeyRound, LogOut, Leaf } from "lucide-react";
+import { Globe, ShieldCheck, ScrollText, Users, KeyRound, LogOut, Leaf } from "lucide-react";
 import { useAuth } from "@/auth/AuthProvider";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const nav = [
   { to: "/app/sites", label: "站点管理", icon: Globe, admin: false },
+  { to: "/app/ssl", label: "SSL 证书", icon: ShieldCheck, admin: false },
   { to: "/app/logs", label: "操作日志", icon: ScrollText, admin: false },
   { to: "/app/users", label: "用户管理", icon: Users, admin: true },
   { to: "/app/me", label: "我的账号", icon: KeyRound, admin: false },
@@ -54,7 +55,7 @@ export function Layout() {
           <div className="mb-2 px-1">
             <div className="truncate text-sm font-medium">{me?.username}</div>
             <div className="text-xs text-muted-foreground">
-              {me?.role === "admin" ? "管理员" : "普通用户"}
+              {me?.systemAdmin ? "系统管理员" : me?.role === "admin" ? "管理员" : "普通用户"}
             </div>
           </div>
           <Button variant="outline" size="sm" className="w-full" onClick={() => logout()}>

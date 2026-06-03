@@ -56,7 +56,7 @@ func (m *Manager) ResolveEnv(requested string) string {
 // ctx is honored at phase boundaries (fail-fast if the caller already cancelled
 // or timed out); lego's Obtain itself isn't context-cancellable, but each HTTP
 // request it makes is bounded by the lego client's default 30s timeout.
-func (m *Manager) Issue(ctx context.Context, domains []string, email, env string, siteID uint) (*CertInfo, error) {
+func (m *Manager) Issue(ctx context.Context, domains []string, email, env, certPath, keyPath string) (*CertInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -112,7 +112,6 @@ func (m *Manager) Issue(ctx context.Context, domains []string, email, env string
 		return nil, fmt.Errorf("证书签发失败: %w", err)
 	}
 
-	certPath, keyPath := certFiles(m.CertsDir, siteID)
 	if err := writeCertKeyPair(certPath, keyPath, res.Certificate, res.PrivateKey); err != nil {
 		return nil, err
 	}

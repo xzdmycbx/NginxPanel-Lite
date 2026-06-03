@@ -194,7 +194,7 @@ func (s *Service) ReconcileSites(sites []models.Site) {
 		if fileExists(s.Paths.SiteConfPath(site.ID)) {
 			continue // already on disk — preserve it (incl. manual edits)
 		}
-		enableTLS := site.SSLMode != models.SSLNone && site.CertPath != "" && fileExists(site.CertPath)
+		enableTLS := site.CertID != nil && site.CertPath != "" && fileExists(site.CertPath)
 		files, err := Render(site, s.Paths, enableTLS)
 		if err != nil {
 			log.Printf("[reconcile] site %d render: %v", site.ID, err)

@@ -44,14 +44,13 @@ func ParseCertInfo(certPEM []byte) (*CertInfo, error) {
 	}, nil
 }
 
-// StoreManualCert validates and writes an uploaded cert/key pair for a site,
-// returning the parsed info with the on-disk paths populated.
-func StoreManualCert(certsDir string, siteID uint, certPEM, keyPEM []byte) (*CertInfo, error) {
+// StoreManualCert validates an uploaded cert/key pair and writes it atomically
+// to the given paths, returning the parsed info with the paths populated.
+func StoreManualCert(certPath, keyPath string, certPEM, keyPEM []byte) (*CertInfo, error) {
 	info, err := ValidatePEMPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, err
 	}
-	certPath, keyPath := certFiles(certsDir, siteID)
 	if err := writeCertKeyPair(certPath, keyPath, certPEM, keyPEM); err != nil {
 		return nil, err
 	}

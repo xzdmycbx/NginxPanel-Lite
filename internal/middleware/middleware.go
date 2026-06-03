@@ -122,6 +122,10 @@ func (a *Auth) RequireAuth() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": "session_revoked", "message": "会话已失效，请重新登录"})
 			return
 		}
+		if u.Disabled {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "account_disabled", "message": "账号已被停用"})
+			return
+		}
 		// Sliding refresh: reissue when close to expiry.
 		if claims.ExpiresAt != nil && time.Until(claims.ExpiresAt.Time) < 30*time.Minute {
 			if tok, err := auth.Issue(u, auth.StageFull, true, a.TTL, a.Secret); err == nil {
@@ -139,6 +143,24 @@ func (a *Auth) RequireAdmin() gin.HandlerFunc {
 		claims := ClaimsFrom(c)
 		if claims == nil || claims.Role != models.RoleAdmin {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "forbidden", "message": "需要管理员权限"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireSystemAdmin must run after RequireAuth; it allows only the single
+// system (super) admin. SystemAdmin isn't carried in the JWT, so look it up.
+func (a *Auth) RequireSystemAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims := ClaimsFrom(c)
+		if claims == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "forbidden", "message": "需要系统管理员权限"})
+			return
+		}
+		var u models.User
+		if err := a.DB.First(&u, claims.UserID).Error; err != nil || !u.SystemAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "forbidden", "message": "需要系统管理员权限"})
 			return
 		}
 		c.Next()

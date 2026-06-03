@@ -62,7 +62,7 @@ func (h *Handler) Setup(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "bad_password", "密码无效")
 		return
 	}
-	user := models.User{Username: in.Username, PasswordHash: hash, Role: models.RoleAdmin, TOTPEnabled: false}
+	user := models.User{Username: in.Username, PasswordHash: hash, Role: models.RoleAdmin, SystemAdmin: true, TOTPEnabled: false}
 	// Re-check the user count and create the first admin atomically: with a single
 	// SQLite connection the transaction serializes concurrent /setup requests, so
 	// two of them can't both pass the "no users yet" guard and create an admin
@@ -131,6 +131,13 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	h.limiter.Reset(rlKey)
+
+	if user.Disabled {
+		audit.Set(c, &audit.Entry{Action: audit.ActLoginFail, TargetType: audit.TargetAuth, TargetID: user.Username,
+			Detail: "登录失败：账号已被停用", Result: audit.ResultError, ActorUserID: &user.ID, ActorUsername: user.Username})
+		fail(c, http.StatusForbidden, "account_disabled", "账号已被停用，请联系系统管理员")
+		return
+	}
 
 	if !user.TOTPEnabled {
 		token, _ := auth.Issue(user, auth.StageEnroll, false, enrollTTL, h.Cfg.JWTSecret)
@@ -280,7 +287,8 @@ func (h *Handler) Me(c *gin.Context) {
 		"needsSetup":    false,
 		"authenticated": true,
 		"user": gin.H{
-			"id": user.ID, "username": user.Username, "role": user.Role, "totpEnabled": user.TOTPEnabled,
+			"id": user.ID, "username": user.Username, "role": user.Role,
+			"systemAdmin": user.SystemAdmin, "totpEnabled": user.TOTPEnabled,
 		},
 	})
 }
@@ -328,5 +336,85 @@ func (h *Handler) ChangeOwnPassword(c *gin.Context) {
 	h.issueFull(c, user) // keep current session valid with the new epoch
 
 	audit.Set(c, &audit.Entry{Action: audit.ActUserChangePwd, TargetType: audit.TargetUser, TargetID: user.Username, Detail: "修改本人密码"})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type selfTOTPInitReq struct {
+	Password string `json:"password"`
+}
+
+// SelfResetTOTPInit starts a self-service TOTP re-bind: verify the current
+// password, then return a fresh secret/QR stored as PENDING — the active TOTP
+// keeps working until the new one is confirmed (so abandoning is safe).
+func (h *Handler) SelfResetTOTPInit(c *gin.Context) {
+	claims := middleware.ClaimsFrom(c)
+	var in selfTOTPInitReq
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, "bad_request", "请求格式错误")
+		return
+	}
+	var user models.User
+	if err := h.DB.First(&user, claims.UserID).Error; err != nil {
+		fail(c, http.StatusNotFound, "not_found", "用户不存在")
+		return
+	}
+	if !auth.CheckPassword(user.PasswordHash, in.Password) {
+		fail(c, http.StatusBadRequest, "wrong_password", "密码错误")
+		return
+	}
+	res, err := auth.GenerateTOTP(user.Username)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "internal", "生成两步验证失败")
+		return
+	}
+	enc, err := auth.Encrypt(h.Cfg.SecretKey, res.SecretB32)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "internal", "加密失败")
+		return
+	}
+	user.TOTPPending = enc
+	if !saveOr500(c, h.DB, &user) {
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// SelfResetTOTPConfirm validates the new code against the pending secret, swaps
+// it in, and bumps TokenEpoch to revoke ALL sessions (incl. the current one) so
+// the user must log in again with the new authenticator.
+func (h *Handler) SelfResetTOTPConfirm(c *gin.Context) {
+	claims := middleware.ClaimsFrom(c)
+	var in totpCode
+	_ = c.ShouldBindJSON(&in)
+	var user models.User
+	if err := h.DB.First(&user, claims.UserID).Error; err != nil {
+		fail(c, http.StatusNotFound, "not_found", "用户不存在")
+		return
+	}
+	if user.TOTPPending == "" {
+		fail(c, http.StatusBadRequest, "no_pending", "请先发起重置")
+		return
+	}
+	rlKey := "totp_rebind:" + strconv.Itoa(int(user.ID)) + ":" + c.ClientIP()
+	if ok, retry := h.limiter.Allowed(rlKey); !ok {
+		fail(c, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("尝试过于频繁，请 %d 秒后再试", int(retry.Seconds())+1))
+		return
+	}
+	secret, err := auth.Decrypt(h.Cfg.SecretKey, user.TOTPPending)
+	if err != nil || !auth.ValidateTOTP(in.Code, secret) {
+		h.limiter.Fail(rlKey)
+		fail(c, http.StatusBadRequest, "invalid_totp", "验证码错误")
+		return
+	}
+	h.limiter.Reset(rlKey)
+	user.TOTPSecret = user.TOTPPending
+	user.TOTPPending = ""
+	user.TOTPEnabled = true
+	user.TokenEpoch++ // revoke all sessions (incl. current) — re-login required
+	if !saveOr500(c, h.DB, &user) {
+		return
+	}
+	audit.Set(c, &audit.Entry{Action: audit.ActTOTPRebind, TargetType: audit.TargetAuth, TargetID: user.Username,
+		Detail: "重置本人两步验证（已吊销所有会话）", ActorUserID: &user.ID, ActorUsername: user.Username})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

@@ -1,5 +1,5 @@
 import { api } from "./client";
-import type { Site, SSLInfo, Backup, ProxyLocation } from "./types";
+import type { Site, Backup, ProxyLocation } from "./types";
 
 export interface SiteInput {
   name: string;
@@ -41,12 +41,8 @@ export const sitesApi = {
   saveConfig: (id: number | string, content: string) => api.put(`/sites/${id}/config`, { content }),
   preview: (id: number | string) =>
     api.post<{ current: string; generated: string }>(`/sites/${id}/preview`).then((r) => r.data),
-  ssl: (id: number | string) => api.get<SSLInfo>(`/sites/${id}/ssl`).then((r) => r.data),
-  sslManual: (id: number | string, certPem: string, keyPem: string) =>
-    api.post(`/sites/${id}/ssl/manual`, { certPem, keyPem }),
-  sslAcme: (id: number | string, email: string, env: string) => api.post(`/sites/${id}/ssl/acme`, { email, env }),
-  sslRenew: (id: number | string) => api.post(`/sites/${id}/ssl/renew`),
-  sslDisable: (id: number | string) => api.delete(`/sites/${id}/ssl`),
+  bindCert: (id: number | string, certId: number | null) =>
+    api.post<Site>(`/sites/${id}/cert`, { certId }).then((r) => r.data),
   backups: (id: number | string) => api.get<{ items: Backup[] }>(`/sites/${id}/backups`).then((r) => r.data.items),
   restore: (id: number | string, ts: string) => api.post(`/sites/${id}/backups/${ts}/restore`),
 };

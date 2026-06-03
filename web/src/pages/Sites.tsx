@@ -14,9 +14,10 @@ import { Dialog, DialogHeader, DialogTitle, DialogDescription, DialogFooter } fr
 import { FullPageSpinner } from "@/components/ui/spinner";
 
 function sslBadge(s: Site) {
-  if (s.sslMode === "acme") return <Badge variant="success"><ShieldCheck className="mr-1 h-3 w-3" />Let's Encrypt</Badge>;
-  if (s.sslMode === "manual") return <Badge variant="default"><Shield className="mr-1 h-3 w-3" />手动证书</Badge>;
-  return <Badge variant="muted">未配置</Badge>;
+  if (!s.cert) return <Badge variant="muted">未配置</Badge>;
+  if (s.cert.source === "acme")
+    return <Badge variant="success"><ShieldCheck className="mr-1 h-3 w-3" />{s.cert.name}</Badge>;
+  return <Badge variant="default"><Shield className="mr-1 h-3 w-3" />{s.cert.name}</Badge>;
 }
 
 function targetSummary(s: Site): string {

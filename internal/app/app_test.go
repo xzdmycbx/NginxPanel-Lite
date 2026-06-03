@@ -306,9 +306,10 @@ func TestStageTokenRevokedOnEpochBump(t *testing.T) {
 	}
 }
 
-// TestAdminCannotManageOtherAdmin verifies an admin cannot reset another
-// admin's password or TOTP, but can manage normal users.
-func TestAdminCannotManageOtherAdmin(t *testing.T) {
+// TestRBACPermissions locks in the system-admin tier: the setup (system) admin
+// manages every account; a regular admin may only manage normal users, cannot
+// create admins, and cannot disable accounts; a disabled account cannot log in.
+func TestRBACPermissions(t *testing.T) {
 	t.Setenv("PANEL_DATA_DIR", t.TempDir())
 	t.Setenv("PANEL_NGINX_DRYRUN", "true")
 	t.Setenv("PANEL_COOKIE_SECURE", "false")
@@ -323,15 +324,16 @@ func TestAdminCannotManageOtherAdmin(t *testing.T) {
 	srv := httptest.NewServer(application.Server.Handler)
 	defer srv.Close()
 
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-
-	post := func(path string, body any) (int, map[string]any) {
+	newClient := func() *http.Client {
+		jar, _ := cookiejar.New(nil)
+		return &http.Client{Jar: jar}
+	}
+	post := func(c *http.Client, path string, body any) (int, map[string]any) {
 		var buf bytes.Buffer
 		if body != nil {
 			_ = json.NewEncoder(&buf).Encode(body)
 		}
-		resp, err := client.Post(srv.URL+path, "application/json", &buf)
+		resp, err := c.Post(srv.URL+path, "application/json", &buf)
 		if err != nil {
 			t.Fatalf("POST %s: %v", path, err)
 		}
@@ -340,59 +342,110 @@ func TestAdminCannotManageOtherAdmin(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&out)
 		return resp.StatusCode, out
 	}
-	put := func(path string, body any) int {
+	put := func(c *http.Client, path string, body any) int {
 		var buf bytes.Buffer
 		_ = json.NewEncoder(&buf).Encode(body)
 		req, _ := http.NewRequest(http.MethodPut, srv.URL+path, &buf)
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
+		resp, err := c.Do(req)
 		if err != nil {
 			t.Fatalf("PUT %s: %v", path, err)
 		}
 		defer resp.Body.Close()
 		return resp.StatusCode
 	}
-
-	// admin1 setup + TOTP
-	post("/api/setup", map[string]string{"username": "admin1", "password": "Admin#1234"})
-	_, enroll := post("/api/auth/totp/enroll", nil)
-	code, _ := totp.GenerateCode(enroll["secret"].(string), time.Now())
-	post("/api/auth/totp/activate", map[string]string{"code": code})
-
-	// create another admin and a normal user
-	if st, _ := post("/api/users", map[string]any{"username": "admin2", "password": "Admin#1234", "role": "admin"}); st != 200 {
-		t.Fatalf("create admin2: %d", st)
-	}
-	if st, _ := post("/api/users", map[string]any{"username": "bob", "password": "Bob#12345", "role": "user"}); st != 200 {
-		t.Fatalf("create bob: %d", st)
-	}
-
-	// fetch ids
-	resp, _ := client.Get(srv.URL + "/api/users")
-	var list map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&list)
-	resp.Body.Close()
-	var admin2ID, bobID int
-	for _, it := range list["items"].([]any) {
-		m := it.(map[string]any)
-		switch m["username"] {
-		case "admin2":
-			admin2ID = int(m["id"].(float64))
-		case "bob":
-			bobID = int(m["id"].(float64))
+	// enrollActivate brings a password-verified session to a full TOTP session.
+	enrollActivate := func(c *http.Client) {
+		_, en := post(c, "/api/auth/totp/enroll", nil)
+		secret, _ := en["secret"].(string)
+		code, _ := totp.GenerateCode(secret, time.Now())
+		if st, _ := post(c, "/api/auth/totp/activate", map[string]string{"code": code}); st != 200 {
+			t.Fatalf("activate failed: %d", st)
 		}
 	}
+	fullLogin := func(username, password string) *http.Client {
+		c := newClient()
+		st, r := post(c, "/api/auth/login", map[string]string{"username": username, "password": password})
+		if st != 200 {
+			t.Fatalf("login %s status %d", username, st)
+		}
+		if r["next"] == "needs_totp_enroll" {
+			enrollActivate(c)
+		}
+		return c
+	}
+	ids := func(c *http.Client) map[string]int {
+		resp, _ := c.Get(srv.URL + "/api/users")
+		var list map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&list)
+		resp.Body.Close()
+		out := map[string]int{}
+		for _, it := range list["items"].([]any) {
+			m := it.(map[string]any)
+			out[m["username"].(string)] = int(m["id"].(float64))
+		}
+		return out
+	}
 
-	// cannot reset another admin's password or TOTP
-	if st := put(fmt.Sprintf("/api/users/%d/password", admin2ID), map[string]string{"newPassword": "New#12345"}); st != http.StatusForbidden {
-		t.Fatalf("expected 403 resetting admin2 password, got %d", st)
+	// system (super) admin = the setup account
+	sys := newClient()
+	post(sys, "/api/setup", map[string]string{"username": "admin1", "password": "Admin#1234"})
+	enrollActivate(sys)
+
+	for _, u := range []struct{ name, role string }{{"admin2", "admin"}, {"admin3", "admin"}, {"bob", "user"}} {
+		if st, _ := post(sys, "/api/users", map[string]any{"username": u.name, "password": "Pass#1234", "role": u.role}); st != 200 {
+			t.Fatalf("create %s: %d", u.name, st)
+		}
 	}
-	if st, _ := post(fmt.Sprintf("/api/users/%d/totp/reset", admin2ID), nil); st != http.StatusForbidden {
-		t.Fatalf("expected 403 resetting admin2 totp, got %d", st)
+	id := ids(sys)
+
+	// system admin CAN reset another admin's and a user's password
+	if st := put(sys, fmt.Sprintf("/api/users/%d/password", id["admin2"]), map[string]string{"newPassword": "Admin2#new1"}); st != 200 {
+		t.Fatalf("system admin reset admin2 pwd: want 200 got %d", st)
 	}
-	// but can reset a normal user's password
-	if st := put(fmt.Sprintf("/api/users/%d/password", bobID), map[string]string{"newPassword": "New#12345"}); st != 200 {
-		t.Fatalf("expected 200 resetting bob password, got %d", st)
+	if st := put(sys, fmt.Sprintf("/api/users/%d/password", id["bob"]), map[string]string{"newPassword": "Bob#new123"}); st != 200 {
+		t.Fatalf("system admin reset bob pwd: want 200 got %d", st)
+	}
+
+	// a regular admin (admin2, password just reset) logs in to a full session
+	reg := fullLogin("admin2", "Admin2#new1")
+
+	// regular admin CANNOT manage the system admin or another admin
+	if st := put(reg, fmt.Sprintf("/api/users/%d/password", id["admin1"]), map[string]string{"newPassword": "x"}); st != http.StatusForbidden {
+		t.Fatalf("regular admin reset system-admin pwd: want 403 got %d", st)
+	}
+	if st := put(reg, fmt.Sprintf("/api/users/%d/password", id["admin3"]), map[string]string{"newPassword": "x"}); st != http.StatusForbidden {
+		t.Fatalf("regular admin reset other admin pwd: want 403 got %d", st)
+	}
+	if st, _ := post(reg, fmt.Sprintf("/api/users/%d/totp/reset", id["admin3"]), nil); st != http.StatusForbidden {
+		t.Fatalf("regular admin reset other admin totp: want 403 got %d", st)
+	}
+	// but CAN manage a normal user
+	if st := put(reg, fmt.Sprintf("/api/users/%d/password", id["bob"]), map[string]string{"newPassword": "Bob#new456"}); st != 200 {
+		t.Fatalf("regular admin reset user pwd: want 200 got %d", st)
+	}
+	// regular admin CANNOT create an admin, CAN create a user
+	if st, _ := post(reg, "/api/users", map[string]any{"username": "sneaky", "password": "Pass#1234", "role": "admin"}); st != http.StatusForbidden {
+		t.Fatalf("regular admin create admin: want 403 got %d", st)
+	}
+	if st, _ := post(reg, "/api/users", map[string]any{"username": "carol", "password": "Pass#1234", "role": "user"}); st != 200 {
+		t.Fatalf("regular admin create user: want 200 got %d", st)
+	}
+	// disabling is system-admin only
+	if st, _ := post(reg, fmt.Sprintf("/api/users/%d/disable", id["bob"]), nil); st != http.StatusForbidden {
+		t.Fatalf("regular admin disable: want 403 got %d", st)
+	}
+
+	// system admin cannot disable itself, but can disable a regular admin
+	if st, _ := post(sys, fmt.Sprintf("/api/users/%d/disable", id["admin1"]), nil); st != http.StatusBadRequest {
+		t.Fatalf("system admin disable self: want 400 got %d", st)
+	}
+	if st, _ := post(sys, fmt.Sprintf("/api/users/%d/disable", id["admin2"]), nil); st != 200 {
+		t.Fatalf("system admin disable admin2: want 200 got %d", st)
+	}
+	// the disabled account can no longer log in
+	if st, r := post(newClient(), "/api/auth/login", map[string]string{"username": "admin2", "password": "Admin2#new1"}); st != http.StatusForbidden || r["code"] != "account_disabled" {
+		t.Fatalf("disabled login: want 403 account_disabled, got %d %v", st, r["code"])
 	}
 }
 

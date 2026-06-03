@@ -44,14 +44,16 @@ export function Logs() {
           </div>
           <div className="flex flex-col gap-1.5">
             <Label className="text-xs">动作类型</Label>
-            <Select className="h-9 w-44" value={action} onChange={(e) => setAction(e.target.value)}>
-              <option value="">全部</option>
-              {Object.keys(actionLabels).map((k) => (
-                <option key={k} value={k}>
-                  {actionLabels[k]}
-                </option>
-              ))}
-            </Select>
+            <Select
+              className="w-44"
+              searchable
+              value={action}
+              onChange={setAction}
+              options={[
+                { value: "", label: "全部" },
+                ...Object.keys(actionLabels).map((k) => ({ value: k, label: actionLabels[k] })),
+              ]}
+            />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label className="text-xs">起始日期</Label>
@@ -77,7 +79,7 @@ export function Logs() {
               <TableHead>IP</TableHead>
               <TableHead>动作</TableHead>
               <TableHead>详情</TableHead>
-              <TableHead>结果</TableHead>
+              <TableHead className="whitespace-nowrap">结果</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -93,7 +95,7 @@ export function Logs() {
                     <Badge variant="secondary">{actionLabel(l.action)}</Badge>
                   </TableCell>
                   <TableCell className="text-sm">{l.detail}</TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     {l.result === "ok" ? <Badge variant="success">成功</Badge> : <Badge variant="danger">失败</Badge>}
                   </TableCell>
                 </TableRow>

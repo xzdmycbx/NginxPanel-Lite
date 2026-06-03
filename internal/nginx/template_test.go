@@ -54,8 +54,9 @@ func TestRenderPlainHTTP(t *testing.T) {
 func TestRenderTLSWithRedirect(t *testing.T) {
 	site := &models.Site{
 		ID: 2, ServerNames: []string{"b.example.com"}, UpstreamTargets: []string{"http://app:8080"},
-		SSLMode: models.SSLManual, ForceHTTPSRedirect: true,
-		CertPath: "/etc/nginx-panel/certs/site-2/fullchain.pem", KeyPath: "/etc/nginx-panel/certs/site-2/privkey.pem",
+		ForceHTTPSRedirect: true,
+		CertPath:           "/etc/nginx-panel/certs/site-2/fullchain.pem",
+		KeyPath:            "/etc/nginx-panel/certs/site-2/privkey.pem",
 	}
 	files, err := Render(site, testPaths(), true)
 	if err != nil {

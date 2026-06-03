@@ -30,11 +30,14 @@ const (
 	ActLoginFail       = "auth.login_fail"
 	ActLogout          = "auth.logout"
 	ActTOTPEnroll      = "auth.totp_enroll"
+	ActTOTPRebind      = "auth.totp_rebind"
 	ActUserCreate      = "user.create"
 	ActUserDelete      = "user.delete"
 	ActUserResetPwd    = "user.reset_password"
 	ActUserResetTOTP   = "user.reset_totp"
 	ActUserChangePwd   = "user.change_password"
+	ActUserDisable     = "user.disable"
+	ActUserEnable      = "user.enable"
 	ActSiteCreate      = "site.create"
 	ActSiteUpdate      = "site.update"
 	ActSiteDelete      = "site.delete"
@@ -49,6 +52,11 @@ const (
 	ActSSLACMEIssue    = "ssl.acme_issue"
 	ActSSLACMERenew    = "ssl.acme_renew"
 	ActSSLDisable      = "ssl.disable"
+	ActCertCreate      = "cert.create"
+	ActCertIssue       = "cert.acme_issue"
+	ActCertRenew       = "cert.acme_renew"
+	ActCertDelete      = "cert.delete"
+	ActSiteBindCert    = "site.bind_cert"
 )
 
 const (

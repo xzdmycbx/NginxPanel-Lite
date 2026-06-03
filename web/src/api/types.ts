@@ -1,5 +1,5 @@
 export type Role = "admin" | "user";
-export type SSLMode = "none" | "manual" | "acme";
+export type CertSource = "manual" | "acme";
 
 export interface Me {
   needsSetup: boolean;
@@ -8,6 +8,7 @@ export interface Me {
     id: number;
     username: string;
     role: Role;
+    systemAdmin: boolean;
     totpEnabled: boolean;
   };
 }
@@ -20,6 +21,14 @@ export interface ProxyLocation {
   extraConfig: string;
 }
 
+export interface CertBrief {
+  id: number;
+  name: string;
+  source: CertSource;
+  notAfter?: string | null;
+  daysLeft?: number | null;
+}
+
 export interface Site {
   id: number;
   name: string;
@@ -28,12 +37,8 @@ export interface Site {
   upstreamTargets: string[] | null; // legacy fallback
   websocketUpgrade: boolean;
   forceHttpsRedirect: boolean;
-  sslMode: SSLMode;
-  certNotAfter?: string | null;
-  lastRenewedAt?: string | null;
-  acmeEmail?: string;
-  acmeEnv?: string;
-  renewError?: string;
+  certId?: number | null;
+  cert?: CertBrief | null;
   rawConfigOverride?: string;
   rawEdited?: boolean;
   enabled: boolean;
@@ -41,21 +46,28 @@ export interface Site {
   updatedAt: string;
 }
 
-export interface SSLInfo {
-  mode: SSLMode;
+export interface Certificate {
+  id: number;
+  name: string;
+  source: CertSource;
   domains: string[];
   notAfter?: string | null;
   daysLeft?: number | null;
   issuer?: string;
-  env?: string;
+  acmeEmail?: string;
+  acmeEnv?: string;
   lastRenewedAt?: string | null;
   renewError?: string;
+  inUseBy: string[];
+  createdAt: string;
 }
 
 export interface UserView {
   id: number;
   username: string;
   role: Role;
+  systemAdmin: boolean;
+  disabled: boolean;
   totpEnabled: boolean;
   createdAt: string;
 }

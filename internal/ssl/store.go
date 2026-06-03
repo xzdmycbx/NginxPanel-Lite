@@ -8,10 +8,15 @@ import (
 	"path/filepath"
 )
 
-// certFiles returns the fullchain/privkey paths for a site under certsDir.
-func certFiles(certsDir string, siteID uint) (cert, key string) {
-	d := filepath.Join(certsDir, fmt.Sprintf("site-%d", siteID))
+// NamedCertFiles returns the fullchain/privkey paths for a global named cert.
+func NamedCertFiles(certsDir string, certID uint) (cert, key string) {
+	d := filepath.Join(certsDir, fmt.Sprintf("cert-%d", certID))
 	return filepath.Join(d, "fullchain.pem"), filepath.Join(d, "privkey.pem")
+}
+
+// CertDir returns a named cert's directory (for deletion).
+func CertDir(certsDir string, certID uint) string {
+	return filepath.Join(certsDir, fmt.Sprintf("cert-%d", certID))
 }
 
 // writeCertKeyPair replaces a site's cert+key as one unit: both are staged to

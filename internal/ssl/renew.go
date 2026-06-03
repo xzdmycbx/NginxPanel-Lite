@@ -43,48 +43,48 @@ func (s *Scheduler) Stop() {
 	}
 }
 
-// RunOnce performs a single renewal sweep over all enabled ACME sites.
+// RunOnce renews ACME certificates near expiry, then reloads nginx once if any
+// certificate's files changed (so sites using them pick up the new content).
 func (s *Scheduler) RunOnce(ctx context.Context) {
-	var sites []models.Site
-	if err := s.DB.Where("ssl_mode = ? AND enabled = ?", models.SSLACME, true).Find(&sites).Error; err != nil {
-		log.Printf("[renew] query sites: %v", err)
+	var certs []models.Certificate
+	if err := s.DB.Where("source = ?", models.CertACME).Find(&certs).Error; err != nil {
+		log.Printf("[renew] query certs: %v", err)
 		return
 	}
-	for i := range sites {
-		site := &sites[i]
-		if site.CertNotAfter != nil && time.Until(*site.CertNotAfter) > renewThreshold {
+	changed := false
+	for i := range certs {
+		cert := &certs[i]
+		if cert.NotAfter != nil && time.Until(*cert.NotAfter) > renewThreshold {
 			continue
 		}
-		s.renewOne(ctx, site)
+		if s.renewOne(ctx, cert) {
+			changed = true
+		}
+	}
+	if changed {
+		if err := s.Nginx.Reload(ctx); err != nil {
+			log.Printf("[renew] nginx reload: %v", err)
+		}
 	}
 }
 
-func (s *Scheduler) renewOne(ctx context.Context, site *models.Site) {
-	target := fmt.Sprintf("%d", site.ID)
-	info, err := s.Mgr.Issue(ctx, site.ServerNames, site.ACMEEmail, site.ACMEEnv, site.ID)
+// renewOne re-issues one certificate to its existing paths. Returns true if it
+// succeeded (so the caller knows to reload nginx).
+func (s *Scheduler) renewOne(ctx context.Context, cert *models.Certificate) bool {
+	target := fmt.Sprintf("%d", cert.ID)
+	info, err := s.Mgr.Issue(ctx, cert.Domains, cert.ACMEEmail, cert.ACMEEnv, cert.CertPath, cert.KeyPath)
 	if err != nil {
-		site.RenewError = err.Error()
-		s.DB.Save(site)
-		_ = s.Rec.System(audit.ActSSLACMERenew, audit.TargetCert, target,
-			fmt.Sprintf("自动续期失败 %v：%s", site.ServerNames, err.Error()), audit.ResultError)
-		log.Printf("[renew] site %d failed: %v", site.ID, err)
-		return
+		cert.RenewError = err.Error()
+		s.DB.Save(cert)
+		_ = s.Rec.System(audit.ActCertRenew, audit.TargetCert, target,
+			fmt.Sprintf("自动续期失败 %s：%s", cert.Name, err.Error()), audit.ResultError)
+		log.Printf("[renew] cert %d failed: %v", cert.ID, err)
+		return false
 	}
 	now := time.Now()
-	site.CertPath, site.KeyPath = info.CertPath, info.KeyPath
-	site.CertNotAfter = &info.NotAfter
-	site.LastRenewedAt = &now
-
-	// Apply before declaring success; record the failure if reload fails.
-	if err := s.Nginx.ApplySite(ctx, site, true); err != nil {
-		site.RenewError = "续期后 nginx 重载失败：" + err.Error()
-		s.DB.Save(site)
-		_ = s.Rec.System(audit.ActSSLACMERenew, audit.TargetCert, target,
-			fmt.Sprintf("续期后重载失败：%s", err.Error()), audit.ResultError)
-		return
-	}
-	site.RenewError = ""
-	s.DB.Save(site)
-	_ = s.Rec.System(audit.ActSSLACMERenew, audit.TargetCert, target,
-		fmt.Sprintf("自动续期成功 %v，有效期至 %s", site.ServerNames, info.NotAfter.Format("2006-01-02")), audit.ResultOK)
+	cert.NotAfter, cert.Issuer, cert.LastRenewedAt, cert.RenewError = &info.NotAfter, info.Issuer, &now, ""
+	s.DB.Save(cert)
+	_ = s.Rec.System(audit.ActCertRenew, audit.TargetCert, target,
+		fmt.Sprintf("自动续期成功 %s，有效期至 %s", cert.Name, info.NotAfter.Format("2006-01-02")), audit.ResultOK)
+	return true
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { UserPlus, KeyRound, Trash2, ShieldOff } from "lucide-react";
+import { UserPlus, KeyRound, Trash2, ShieldOff, UserX, UserCheck } from "lucide-react";
 import { toast } from "sonner";
 import { usersApi } from "@/api/users";
 import { apiError } from "@/api/client";
@@ -25,6 +25,7 @@ export function Users() {
   const [resetUser, setResetUser] = useState<UserView | null>(null);
   const [totpUser, setTotpUser] = useState<UserView | null>(null);
   const [deleteUser, setDeleteUser] = useState<UserView | null>(null);
+  const [disableTarget, setDisableTarget] = useState<UserView | null>(null);
 
   // create form
   const [username, setUsername] = useState("");
@@ -77,6 +78,31 @@ export function Users() {
     onError: (e) => toast.error(apiError(e)),
   });
 
+  const disable = useMutation({
+    mutationFn: () => usersApi.disable(disableTarget!.id),
+    onSuccess: () => {
+      toast.success("账号已停用");
+      setDisableTarget(null);
+      refetch();
+    },
+    onError: (e) => toast.error(apiError(e)),
+  });
+
+  const enable = useMutation({
+    mutationFn: (id: number) => usersApi.enable(id),
+    onSuccess: () => {
+      toast.success("账号已启用");
+      refetch();
+    },
+    onError: (e) => toast.error(apiError(e)),
+  });
+
+  // 自己用个人页面管理；系统管理员可管理任何人，普通管理员只能管理普通用户。
+  const canManage = (u: UserView) =>
+    u.id !== me?.id && (!!me?.systemAdmin || (u.role === "user" && !u.systemAdmin));
+  // 停用/启用仅系统管理员，且不能停用自己或系统管理员。
+  const canToggleDisabled = (u: UserView) => !!me?.systemAdmin && u.id !== me?.id && !u.systemAdmin;
+
   if (isLoading) return <FullPageSpinner />;
 
   return (
@@ -99,6 +125,7 @@ export function Users() {
               <TableHead>用户名</TableHead>
               <TableHead>角色</TableHead>
               <TableHead>两步验证</TableHead>
+              <TableHead className="whitespace-nowrap">状态</TableHead>
               <TableHead>创建时间</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
@@ -107,33 +134,61 @@ export function Users() {
             {users?.map((u) => (
               <TableRow key={u.id}>
                 <TableCell className="font-medium">
-                  {u.username}
+                  <span>{u.username}</span>
                   {u.id === me?.id && <Badge variant="secondary" className="ml-2">本人</Badge>}
                 </TableCell>
-                <TableCell>
-                  {u.role === "admin" ? <Badge>管理员</Badge> : <Badge variant="muted">普通用户</Badge>}
+                <TableCell className="whitespace-nowrap">
+                  {u.systemAdmin ? (
+                    <Badge>系统管理员</Badge>
+                  ) : u.role === "admin" ? (
+                    <Badge variant="secondary">管理员</Badge>
+                  ) : (
+                    <Badge variant="muted">普通用户</Badge>
+                  )}
                 </TableCell>
                 <TableCell>
                   {u.totpEnabled ? <Badge variant="success">已开启</Badge> : <Badge variant="warning">未开启</Badge>}
                 </TableCell>
-                <TableCell className="text-sm text-muted-foreground">{u.createdAt}</TableCell>
+                <TableCell className="whitespace-nowrap">
+                  {u.disabled ? <Badge variant="danger">已停用</Badge> : <Badge variant="muted">正常</Badge>}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{u.createdAt}</TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-1">
-                    <Button variant="ghost" size="icon" title="重置密码" onClick={() => setResetUser(u)}>
-                      <KeyRound className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title="重置两步验证"
-                      disabled={!u.totpEnabled}
-                      onClick={() => setTotpUser(u)}
-                    >
-                      <ShieldOff className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" title="删除" onClick={() => setDeleteUser(u)}>
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
+                    {canManage(u) && (
+                      <Button variant="ghost" size="icon" title="重置密码" onClick={() => setResetUser(u)}>
+                        <KeyRound className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {canManage(u) && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="重置两步验证"
+                        disabled={!u.totpEnabled}
+                        onClick={() => setTotpUser(u)}
+                      >
+                        <ShieldOff className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {canToggleDisabled(u) &&
+                      (u.disabled ? (
+                        <Button variant="ghost" size="icon" title="启用账号" onClick={() => enable.mutate(u.id)}>
+                          <UserCheck className="h-4 w-4 text-primary" />
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" size="icon" title="停用账号" onClick={() => setDisableTarget(u)}>
+                          <UserX className="h-4 w-4 text-amber-600" />
+                        </Button>
+                      ))}
+                    {canManage(u) && (
+                      <Button variant="ghost" size="icon" title="删除" onClick={() => setDeleteUser(u)}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    )}
+                    {!canManage(u) && !canToggleDisabled(u) && (
+                      <span className="px-2 text-xs text-muted-foreground">—</span>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -157,13 +212,19 @@ export function Users() {
             <Label>初始密码</Label>
             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>角色</Label>
-            <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-              <option value="user">普通用户</option>
-              <option value="admin">管理员</option>
-            </Select>
-          </div>
+          {me?.systemAdmin && (
+            <div className="flex flex-col gap-1.5">
+              <Label>角色</Label>
+              <Select
+                value={role}
+                onChange={(v) => setRole(v as Role)}
+                options={[
+                  { value: "user", label: "普通用户" },
+                  { value: "admin", label: "管理员" },
+                ]}
+              />
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setShowCreate(false)}>取消</Button>
@@ -221,6 +282,23 @@ export function Users() {
           <Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
             {remove.isPending && <Spinner />}
             确认删除
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      {/* disable account */}
+      <Dialog open={!!disableTarget} onOpenChange={(o) => !o && setDisableTarget(null)}>
+        <DialogHeader>
+          <DialogTitle>停用账号</DialogTitle>
+          <DialogDescription>
+            确定停用账号 <span className="font-medium text-foreground">{disableTarget?.username}</span> 吗？停用后该账号将无法登录，且其现有会话立即失效（可随时重新启用）。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setDisableTarget(null)}>取消</Button>
+          <Button variant="destructive" disabled={disable.isPending} onClick={() => disable.mutate()}>
+            {disable.isPending && <Spinner />}
+            确认停用
           </Button>
         </DialogFooter>
       </Dialog>

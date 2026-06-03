@@ -8,6 +8,7 @@ import { TotpEnroll } from "@/pages/TotpEnroll";
 import { TotpVerify } from "@/pages/TotpVerify";
 import { Sites } from "@/pages/Sites";
 import { SiteForm } from "@/pages/SiteForm";
+import { Ssl } from "@/pages/Ssl";
 import { Users } from "@/pages/Users";
 import { ChangePassword } from "@/pages/ChangePassword";
 import { Logs } from "@/pages/Logs";
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="sites" element={<Sites />} />
             <Route path="sites/new" element={<SiteForm />} />
             <Route path="sites/:id/edit" element={<SiteForm />} />
+            <Route path="ssl" element={<Ssl />} />
             <Route path="logs" element={<Logs />} />
             <Route path="me" element={<ChangePassword />} />
             <Route element={<RequireAdmin />}>
