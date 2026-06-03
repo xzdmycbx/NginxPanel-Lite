@@ -41,6 +41,9 @@ func (h *Handler) ClearSiteLog(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if siteLocked(c, site) {
+		return
+	}
 	kind := c.Query("type")
 	if kind != "access" && kind != "error" {
 		fail(c, http.StatusBadRequest, "bad_request", "日志类型仅支持 access 或 error")

@@ -59,7 +59,13 @@ export function SiteLogs({ site }: { site: Site }) {
             <RefreshCw className={isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
           </Button>
           {me?.role === "admin" && (
-            <Button variant="outline" size="icon" title="清空" onClick={() => setConfirmClear(true)}>
+            <Button
+              variant="outline"
+              size="icon"
+              title={site.locked ? "站点已锁定" : "清空"}
+              disabled={site.locked}
+              onClick={() => setConfirmClear(true)}
+            >
               <Trash2 className="h-4 w-4 text-destructive" />
             </Button>
           )}

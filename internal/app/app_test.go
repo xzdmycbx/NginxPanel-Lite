@@ -523,6 +523,10 @@ func TestSiteLock(t *testing.T) {
 	if st := put(fmt.Sprintf("/api/sites/%d", id), body); st != http.StatusForbidden {
 		t.Fatalf("edit locked site: want 403 got %d", st)
 	}
+	// ...and rejects clearing its logs
+	if st, _ := post(fmt.Sprintf("/api/sites/%d/logs/clear?type=access", id), nil); st != http.StatusForbidden {
+		t.Fatalf("clear logs on locked site: want 403 got %d", st)
+	}
 	// unlock (TOTP again) then edit works
 	good2, _ := totp.GenerateCode(secret, time.Now())
 	if st, _ := post(fmt.Sprintf("/api/sites/%d/unlock", id), map[string]string{"code": good2}); st != 200 {
