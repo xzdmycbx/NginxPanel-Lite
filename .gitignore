@@ -3,6 +3,7 @@
 /panel.exe
 /out/
 /.gocache/
+/.gomodcache/
 
 # Runtime data
 /data/
