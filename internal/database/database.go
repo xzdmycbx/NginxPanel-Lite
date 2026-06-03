@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -65,7 +66,10 @@ func backfillCerts(db *gorm.DB) error {
 	if err := db.Table("sites").
 		Where("cert_id IS NULL AND ssl_mode IS NOT NULL AND ssl_mode != 'none' AND cert_path != ''").
 		Find(&rows).Error; err != nil {
-		return nil // legacy columns absent (fresh DB) — nothing to migrate
+		if strings.Contains(err.Error(), "no such column") {
+			return nil // fresh DB — legacy ssl columns never existed, nothing to migrate
+		}
+		return err
 	}
 	for _, r := range rows {
 		b, err := os.ReadFile(r.CertPath)
