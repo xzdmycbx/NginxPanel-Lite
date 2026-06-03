@@ -52,10 +52,7 @@ func StoreManualCert(certsDir string, siteID uint, certPEM, keyPEM []byte) (*Cer
 		return nil, err
 	}
 	certPath, keyPath := certFiles(certsDir, siteID)
-	if err := atomicWrite(certPath, certPEM, 0o644); err != nil {
-		return nil, err
-	}
-	if err := atomicWrite(keyPath, keyPEM, 0o600); err != nil {
+	if err := writeCertKeyPair(certPath, keyPath, certPEM, keyPEM); err != nil {
 		return nil, err
 	}
 	info.CertPath, info.KeyPath = certPath, keyPath

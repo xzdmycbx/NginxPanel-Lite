@@ -113,10 +113,7 @@ func (m *Manager) Issue(ctx context.Context, domains []string, email, env string
 	}
 
 	certPath, keyPath := certFiles(m.CertsDir, siteID)
-	if err := atomicWrite(certPath, res.Certificate, 0o644); err != nil {
-		return nil, err
-	}
-	if err := atomicWrite(keyPath, res.PrivateKey, 0o600); err != nil {
+	if err := writeCertKeyPair(certPath, keyPath, res.Certificate, res.PrivateKey); err != nil {
 		return nil, err
 	}
 

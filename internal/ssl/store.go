@@ -14,16 +14,43 @@ func certFiles(certsDir string, siteID uint) (cert, key string) {
 	return filepath.Join(d, "fullchain.pem"), filepath.Join(d, "privkey.pem")
 }
 
-// atomicWrite writes data to path via a temp file + rename, with the given perm.
-func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// writeCertKeyPair replaces a site's cert+key as one unit: both are staged to
+// temp files first (so a write failure leaves the existing pair untouched), then
+// swapped in; if the key swap fails, the cert swap is rolled back. This ensures
+// the on-disk fullchain/privkey are never left mismatched (which would make a
+// later `nginx -t` fail and could strand an HTTPS site on plain :80).
+func writeCertKeyPair(certPath, keyPath string, certPEM, keyPEM []byte) error {
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	certTmp, keyTmp := certPath+".tmp", keyPath+".tmp"
+	if err := os.WriteFile(certTmp, certPEM, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.WriteFile(keyTmp, keyPEM, 0o600); err != nil {
+		_ = os.Remove(certTmp)
+		return err
+	}
+	// Snapshot the current cert so a failed key swap can be undone.
+	certBak := certPath + ".bak"
+	_ = os.Remove(certBak)
+	hadCert := os.Rename(certPath, certBak) == nil
+	if err := os.Rename(certTmp, certPath); err != nil {
+		if hadCert {
+			_ = os.Rename(certBak, certPath)
+		}
+		_ = os.Remove(keyTmp)
+		return err
+	}
+	if err := os.Rename(keyTmp, keyPath); err != nil {
+		_ = os.Remove(certPath) // undo the cert swap to keep cert+key matched
+		if hadCert {
+			_ = os.Rename(certBak, certPath)
+		}
+		return err
+	}
+	_ = os.Remove(certBak)
+	return nil
 }
 
 // emailHash returns a short stable directory name for an ACME account email.
