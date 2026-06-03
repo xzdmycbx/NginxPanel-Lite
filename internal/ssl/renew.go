@@ -61,7 +61,7 @@ func (s *Scheduler) RunOnce(ctx context.Context) {
 
 func (s *Scheduler) renewOne(ctx context.Context, site *models.Site) {
 	target := fmt.Sprintf("%d", site.ID)
-	info, err := s.Mgr.Issue(site.ServerNames, site.ACMEEmail, site.ACMEEnv, site.ID)
+	info, err := s.Mgr.Issue(ctx, site.ServerNames, site.ACMEEmail, site.ACMEEnv, site.ID)
 	if err != nil {
 		site.RenewError = err.Error()
 		s.DB.Save(site)

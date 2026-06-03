@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -126,14 +127,27 @@ func (h *Handler) issueACME(c *gin.Context, site *models.Site, email, env, actio
 	site.ACMEEmail = email
 	site.ACMEEnv = h.SSL.ResolveEnv(env)
 
+	// Remember whether the site currently serves TLS: Phase A drops the 443 block
+	// to answer the HTTP-01 challenge on :80, so a failed issuance must restore it
+	// rather than leave an already-HTTPS site stranded on plain HTTP.
+	hadTLS := enableTLSFor(site)
+
 	// Phase A: ensure nginx serves the ACME webroot on :80 for these domains.
 	if err := h.Nginx.EnsureChallengeServer(ctx, site); err != nil {
 		applyErr(c, err)
 		return
 	}
 	// Phase B: obtain the certificate.
-	info, err := h.SSL.Issue(site.ServerNames, email, site.ACMEEnv, site.ID)
+	info, err := h.SSL.Issue(ctx, site.ServerNames, email, site.ACMEEnv, site.ID)
 	if err != nil {
+		// Restore the previous TLS config on failure. The old cert files are still
+		// on disk (Issue only overwrites them on success), so an existing HTTPS
+		// site keeps working instead of being degraded to :80 by Phase A.
+		if hadTLS {
+			if rbErr := h.Nginx.ApplySite(ctx, site, true); rbErr != nil {
+				log.Printf("[ssl] site %d: restore TLS after failed issuance: %v", site.ID, rbErr)
+			}
+		}
 		site.RenewError = err.Error()
 		h.DB.Save(site)
 		audit.Set(c, &audit.Entry{Action: action, TargetType: audit.TargetCert, TargetID: idStr(site.ID),

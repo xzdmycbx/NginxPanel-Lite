@@ -1,6 +1,7 @@
 package ssl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -51,7 +52,14 @@ func (m *Manager) ResolveEnv(requested string) string {
 // Issue obtains (or renews) a certificate for domains and writes it to the
 // shared certs volume. The caller MUST ensure nginx already serves the ACME
 // webroot for these domains on port 80 before calling.
-func (m *Manager) Issue(domains []string, email, env string, siteID uint) (*CertInfo, error) {
+//
+// ctx is honored at phase boundaries (fail-fast if the caller already cancelled
+// or timed out); lego's Obtain itself isn't context-cancellable, but each HTTP
+// request it makes is bounded by the lego client's default 30s timeout.
+func (m *Manager) Issue(ctx context.Context, domains []string, email, env string, siteID uint) (*CertInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(domains) == 0 {
 		return nil, errors.New("未提供域名")
 	}
@@ -96,6 +104,9 @@ func (m *Manager) Issue(domains []string, email, env string, siteID uint) (*Cert
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err // caller gave up before the (slow) order — don't start it
+	}
 	res, err := client.Certificate.Obtain(certificate.ObtainRequest{Domains: domains, Bundle: true})
 	if err != nil {
 		return nil, fmt.Errorf("证书签发失败: %w", err)
