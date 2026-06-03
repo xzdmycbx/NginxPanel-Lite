@@ -12,6 +12,7 @@ import (
 	"github.com/xzdmycbx/nginxpanel-lite/internal/auth"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/config"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/middleware"
+	"github.com/xzdmycbx/nginxpanel-lite/internal/models"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/nginx"
 	"github.com/xzdmycbx/nginxpanel-lite/internal/ssl"
 )
@@ -59,7 +60,13 @@ func applyErr(c *gin.Context, err error) bool {
 		return false
 	}
 	if ae, ok := err.(*nginx.ApplyError); ok {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "nginx_invalid", "message": ae.Error(), "nginxOutput": ae.NginxOutput})
+		// `nginx -t` output can leak container paths and the include layout; only
+		// admins get the raw detail, normal users get a generic message.
+		if claims := middleware.ClaimsFrom(c); claims != nil && claims.Role == models.RoleAdmin {
+			c.JSON(http.StatusBadRequest, gin.H{"code": "nginx_invalid", "message": ae.Error(), "nginxOutput": ae.NginxOutput})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"code": "nginx_invalid", "message": "nginx 配置校验未通过（详情仅管理员可见）"})
+		}
 		return true
 	}
 	log.Printf("[handler] internal error: %v", err)
