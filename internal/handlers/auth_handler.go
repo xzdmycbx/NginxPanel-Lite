@@ -33,6 +33,10 @@ func validUsername(u string) bool {
 	return len(u) >= 3 && len(u) <= 32
 }
 
+// errSetupDone signals the first admin already exists (lost a concurrent setup
+// race); surfaced as a 403 so the second request is rejected cleanly.
+var errSetupDone = errors.New("setup already completed")
+
 // Setup creates the first admin user (first-run only).
 func (h *Handler) Setup(c *gin.Context) {
 	var in credentials
@@ -59,11 +63,31 @@ func (h *Handler) Setup(c *gin.Context) {
 		return
 	}
 	user := models.User{Username: in.Username, PasswordHash: hash, Role: models.RoleAdmin, TOTPEnabled: false}
-	if err := h.DB.Create(&user).Error; err != nil {
+	// Re-check the user count and create the first admin atomically: with a single
+	// SQLite connection the transaction serializes concurrent /setup requests, so
+	// two of them can't both pass the "no users yet" guard and create an admin
+	// (the username unique index only blocks identical names, not this race).
+	err = h.DB.Transaction(func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&models.User{}).Count(&n).Error; err != nil {
+			return err
+		}
+		if n > 0 {
+			return errSetupDone
+		}
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.Setting{}).Where("key = ?", database.SettingFirstRun).Update("value", "false").Error
+	})
+	if errors.Is(err, errSetupDone) {
+		fail(c, http.StatusForbidden, "setup_done", "系统已初始化")
+		return
+	}
+	if err != nil {
 		fail(c, http.StatusInternalServerError, "internal", "创建用户失败")
 		return
 	}
-	h.DB.Model(&models.Setting{}).Where("key = ?", database.SettingFirstRun).Update("value", "false")
 
 	token, _ := auth.Issue(user, auth.StageEnroll, false, enrollTTL, h.Cfg.JWTSecret)
 	h.Auth.SetSession(c, token, enrollTTL)
@@ -168,11 +192,20 @@ func (h *Handler) TOTPActivate(c *gin.Context) {
 		fail(c, http.StatusForbidden, "already_enrolled", "两步验证已绑定")
 		return
 	}
+	// Rate-limit the binding step too (mirrors Login / TOTPVerify): a holder of a
+	// StageEnroll cookie must not be able to brute-force the 6-digit code freely.
+	rlKey := "totp_enroll:" + strconv.Itoa(int(user.ID)) + ":" + c.ClientIP()
+	if ok, retry := h.limiter.Allowed(rlKey); !ok {
+		fail(c, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("尝试过于频繁，请 %d 秒后再试", int(retry.Seconds())+1))
+		return
+	}
 	secret, err := auth.Decrypt(h.Cfg.SecretKey, user.TOTPSecret)
 	if err != nil || !auth.ValidateTOTP(in.Code, secret) {
+		h.limiter.Fail(rlKey)
 		fail(c, http.StatusBadRequest, "invalid_totp", "验证码错误")
 		return
 	}
+	h.limiter.Reset(rlKey)
 	user.TOTPEnabled = true
 	if !saveOr500(c, h.DB, &user) {
 		return
