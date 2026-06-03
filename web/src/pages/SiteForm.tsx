@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { sitesApi, type SiteInput } from "@/api/sites";
 import { apiError, nginxOutput } from "@/api/client";
 import type { Site } from "@/api/types";
+import { isUnloadGuardBypassed } from "@/lib/unloadGuard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,17 +21,33 @@ import { SslPanel } from "./SslPanel";
 import { SiteFiles } from "./SiteFiles";
 import { SiteLogs } from "./SiteLogs";
 
+// 给每个可增删的输入行一个稳定 id 做 React key：数组下标当 key 在删中间行时会按位置
+// 复用 DOM，破坏焦点 / 输入法 composition / 浏览器自动填充。用进程内自增计数器生成，
+// 避免 crypto.randomUUID 在非安全上下文（纯 http 访问）下不可用。
+let _rowSeq = 0;
+const newRowId = () => `row-${++_rowSeq}`;
+
+interface FieldRow {
+  id: string;
+  value: string;
+}
+
+const toRows = (values: string[]): FieldRow[] =>
+  (values.length ? values : [""]).map((value) => ({ id: newRowId(), value }));
+
 interface LocState {
+  id: string;
   path: string;
-  upstreams: string[];
+  upstreams: FieldRow[];
   websocketUpgrade: boolean;
   cacheEnabled: boolean;
   extraConfig: string;
 }
 
 const emptyLoc = (path = "/"): LocState => ({
+  id: newRowId(),
   path,
-  upstreams: [""],
+  upstreams: [{ id: newRowId(), value: "" }],
   websocketUpgrade: false,
   cacheEnabled: false,
   extraConfig: "",
@@ -41,22 +58,23 @@ type SiteTab = "config" | "ssl" | "logs" | "files";
 function locationsFromSite(site: Site): LocState[] {
   if (site.locations && site.locations.length) {
     return site.locations.map((l) => ({
+      id: newRowId(),
       path: l.path,
-      upstreams: l.upstreamTargets.length ? l.upstreamTargets : [""],
+      upstreams: toRows(l.upstreamTargets),
       websocketUpgrade: l.websocketUpgrade,
       cacheEnabled: l.cacheEnabled,
       extraConfig: l.extraConfig ?? "",
     }));
   }
   if (site.upstreamTargets && site.upstreamTargets.length) {
-    return [{ ...emptyLoc("/"), upstreams: site.upstreamTargets, websocketUpgrade: site.websocketUpgrade }];
+    return [{ ...emptyLoc("/"), upstreams: toRows(site.upstreamTargets), websocketUpgrade: site.websocketUpgrade }];
   }
   return [emptyLoc()];
 }
 
 interface FormState {
   name: string;
-  domains: string[];
+  domains: FieldRow[];
   redirect: boolean;
   rawOverride: string;
   locations: LocState[];
@@ -66,7 +84,7 @@ interface FormState {
 function initialFromSite(site: Site): FormState {
   return {
     name: site.name,
-    domains: site.serverNames.length ? site.serverNames : [""],
+    domains: toRows(site.serverNames),
     redirect: site.forceHttpsRedirect,
     rawOverride: site.rawConfigOverride ?? "",
     locations: locationsFromSite(site),
@@ -75,7 +93,7 @@ function initialFromSite(site: Site): FormState {
 
 // 反向代理目标签名：每个 location 的「路径 + 目标列表」，用于判断保存是否改了代理去向
 function proxyTargetsSig(locs: LocState[]): string {
-  return JSON.stringify(locs.map((l) => [l.path.trim() || "/", l.upstreams.map((u) => u.trim()).filter(Boolean)]));
+  return JSON.stringify(locs.map((l) => [l.path.trim() || "/", l.upstreams.map((u) => u.value.trim()).filter(Boolean)]));
 }
 
 export function SiteForm() {
@@ -99,10 +117,10 @@ export function SiteForm() {
   });
 
   const [name, setName] = useState("");
-  const [domains, setDomains] = useState<string[]>([""]);
+  const [domains, setDomains] = useState<FieldRow[]>(() => [{ id: newRowId(), value: "" }]);
   const [redirect, setRedirect] = useState(true);
   const [rawOverride, setRawOverride] = useState("");
-  const [locations, setLocations] = useState<LocState[]>([emptyLoc()]);
+  const [locations, setLocations] = useState<LocState[]>(() => [emptyLoc()]);
 
   // 用服务端数据填充表单。仅在首次加载或切换到不同站点时回灌；同一站点的后台
   // 重新拉取（断网重连 / 缓存失效）不得覆盖未保存草稿，故按 site.id 设门、保存后再重置基线。
@@ -128,6 +146,7 @@ export function SiteForm() {
   useEffect(() => {
     if (!dirty) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isUnloadGuardBypassed()) return; // ErrorBoundary 自动重载时跳过提示
       e.preventDefault();
       e.returnValue = "";
     };
@@ -143,8 +162,8 @@ export function SiteForm() {
     proxyTargetsSig(locations) !== proxyTargetsSig((JSON.parse(baseline) as FormState).locations);
 
   // --- domain helpers ---
-  const setDomain = (i: number, v: string) => setDomains((d) => d.map((x, idx) => (idx === i ? v : x)));
-  const addDomain = () => setDomains((d) => [...d, ""]);
+  const setDomain = (i: number, v: string) => setDomains((d) => d.map((x, idx) => (idx === i ? { ...x, value: v } : x)));
+  const addDomain = () => setDomains((d) => [...d, { id: newRowId(), value: "" }]);
   const removeDomain = (i: number) => setDomains((d) => (d.length > 1 ? d.filter((_, idx) => idx !== i) : d));
 
   // --- location helpers ---
@@ -153,8 +172,8 @@ export function SiteForm() {
   const addLoc = () => setLocations((ls) => [...ls, emptyLoc(`/path${ls.length}`)]);
   const removeLoc = (i: number) => setLocations((ls) => (ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls));
   const setUpstream = (li: number, ui: number, v: string) =>
-    patchLoc(li, { upstreams: locations[li].upstreams.map((x, idx) => (idx === ui ? v : x)) });
-  const addUpstream = (li: number) => patchLoc(li, { upstreams: [...locations[li].upstreams, ""] });
+    patchLoc(li, { upstreams: locations[li].upstreams.map((x, idx) => (idx === ui ? { ...x, value: v } : x)) });
+  const addUpstream = (li: number) => patchLoc(li, { upstreams: [...locations[li].upstreams, { id: newRowId(), value: "" }] });
   const removeUpstream = (li: number, ui: number) =>
     patchLoc(li, {
       upstreams: locations[li].upstreams.length > 1 ? locations[li].upstreams.filter((_, idx) => idx !== ui) : locations[li].upstreams,
@@ -163,12 +182,12 @@ export function SiteForm() {
   async function onSubmit() {
     const body: SiteInput = {
       name: name.trim(),
-      serverNames: domains.map((d) => d.trim()).filter(Boolean),
+      serverNames: domains.map((d) => d.value.trim()).filter(Boolean),
       forceHttpsRedirect: redirect,
       rawConfigOverride: rawOverride,
       locations: locations.map((l) => ({
         path: l.path.trim() || "/",
-        upstreamTargets: l.upstreams.map((u) => u.trim()).filter(Boolean),
+        upstreamTargets: l.upstreams.map((u) => u.value.trim()).filter(Boolean),
         websocketUpgrade: l.websocketUpgrade,
         cacheEnabled: l.cacheEnabled,
         extraConfig: l.extraConfig,
@@ -258,8 +277,8 @@ export function SiteForm() {
             <Label>域名绑定</Label>
             <p className="-mt-1 text-xs text-muted-foreground">一行一个域名，对应 nginx server_name</p>
             {domains.map((d, i) => (
-              <div key={i} className="flex gap-2">
-                <Input placeholder="例如 app.example.com" value={d} onChange={(e) => setDomain(i, e.target.value)} />
+              <div key={d.id} className="flex gap-2">
+                <Input placeholder="例如 app.example.com" value={d.value} onChange={(e) => setDomain(i, e.target.value)} />
                 <Button type="button" variant="ghost" size="icon" disabled={domains.length === 1} onClick={() => removeDomain(i)}>
                   <X className="h-4 w-4" />
                 </Button>
@@ -292,7 +311,7 @@ export function SiteForm() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {locations.map((loc, li) => (
-            <div key={li} className="rounded-xl border border-border/70 bg-muted/30 p-4">
+            <div key={loc.id} className="rounded-xl border border-border/70 bg-muted/30 p-4">
               <div className="mb-3 flex items-center gap-2">
                 <div className="flex-1">
                   <Label className="text-xs text-muted-foreground">location 路径</Label>
@@ -319,11 +338,11 @@ export function SiteForm() {
               <Label className="text-xs text-muted-foreground">反向代理目标（proxy_pass）</Label>
               <div className="mt-1 flex flex-col gap-2">
                 {loc.upstreams.map((u, ui) => (
-                  <div key={ui} className="flex gap-2">
+                  <div key={u.id} className="flex gap-2">
                     <Input
                       className="font-mono"
                       placeholder="http://127.0.0.1:3000 或 app:8080"
-                      value={u}
+                      value={u.value}
                       onChange={(e) => setUpstream(li, ui, e.target.value)}
                     />
                     <Button type="button" variant="ghost" size="icon" disabled={loc.upstreams.length === 1} onClick={() => removeUpstream(li, ui)}>

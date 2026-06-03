@@ -101,7 +101,7 @@ export function Logs() {
             ) : (
               <TableRow>
                 <TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">
-                  {isFetching ? <Spinner className="mx-auto h-5 w-5 text-primary" /> : "暂无日志"}
+                  {isFetching ? <Spinner className="mx-auto h-5 w-5 text-primary" /> : <span>暂无日志</span>}
                 </TableCell>
               </TableRow>
             )}

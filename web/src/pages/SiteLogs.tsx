@@ -70,7 +70,9 @@ export function SiteLogs({ site }: { site: Site }) {
           {isFetching && !data ? (
             <Spinner className="h-5 w-5" />
           ) : data && data.length ? (
-            data.join("\n")
+            // 包一层元素，避免 <pre> 的子节点在「纯文本」与「元素」间切换：
+            // 一旦该文本节点被翻译/注入改过，纯文本↔元素的 removeChild 会失配崩溃。
+            <code>{data.join("\n")}</code>
           ) : (
             <span className="text-slate-400">暂无日志（该域名尚无流量，或日志尚未生成）</span>
           )}

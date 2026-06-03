@@ -1,8 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" translate="no">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 界面本就是中文，禁止浏览器/扩展自动翻译：翻译会就地替换文本节点(<font> 包裹)，
+         破坏 React 维护的真实 DOM，导致重渲染时概率性抛 insertBefore/removeChild。 -->
+    <meta name="google" content="notranslate" />
+    <!-- 私有管理后台，禁止搜索引擎收录（noindex 才是真正"不索引"；X-Robots-Tag 响应头同样设置）。 -->
+    <meta name="robots" content="noindex, nofollow" />
     <title>NginxPanel-Lite 控制台</title>
   </head>
   <body>
