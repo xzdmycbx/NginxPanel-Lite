@@ -41,13 +41,20 @@ docker compose up -d --build
                     └─ /var/run/docker.sock ──▶ docker exec nginx -t / -s reload
 ```
 
-共享卷(两个容器挂载在相同路径,保证生成的路径在 nginx 内有效):
+数据**直接落在宿主磁盘**(bind mount,不再用 Docker 命名卷),根目录由 `.env` 的 `PANEL_DATA_ROOT`(默认 `./data`)控制;数据可见、可直接备份(`tar`/快照整个目录即可),宿主重启也不会丢。两个容器挂载在相同的容器内路径,保证生成的路径在 nginx 内有效:
 
-| 卷 | 路径 | 内容 |
+| 宿主目录(`PANEL_DATA_ROOT` 下) | 容器内路径 | 内容 |
 |---|---|---|
-| `nginx-config` | `/etc/nginx-panel` | `nginx.conf`、`sites/site-<id>/{site.conf,locations/*.conf}`、`logs/site-<id>/{access,error}.log`、`certs/`、`backups/` |
-| `acme-webroot` | `/var/www/acme-webroot` | HTTP-01 challenge token |
-| `paneldata` | `/data`(仅面板) | `panel.db`、ACME 账户 |
+| `nginx-config/` | `/etc/nginx-panel` | `nginx.conf`、`sites/site-<id>/{site.conf,locations/*.conf}`、`logs/site-<id>/{access,error}.log`、`certs/`、`backups/` |
+| `acme-webroot/` | `/var/www/acme-webroot` | HTTP-01 challenge token |
+| `panel/` | `/data`(仅面板) | `panel.db`、`.jwt_secret`、ACME 账户 |
+
+> 从旧版(Docker 命名卷)升级:切换到本版后,先停服并把命名卷数据迁到磁盘,再启动:
+> ```bash
+> docker compose down
+> ./scripts/migrate-volumes-to-disk.sh   # 幂等:已有数据则跳过,绝不覆盖
+> docker compose up -d
+> ```
 
 主 `nginx.conf` 由**面板托管并 seed**(不可编辑),nginx 以 `nginx -c /etc/nginx-panel/nginx.conf` 启动;它 `include sites/site-*/site.conf`,每个 `site.conf` 再 `include sites/site-<id>/locations/*.conf`。内置默认 `:80` server 使**首启即可签发证书**。日志写在同一共享卷,面板直接读取(无需额外卷)。
 
