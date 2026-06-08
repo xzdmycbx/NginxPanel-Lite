@@ -16,9 +16,12 @@ services:
     ports:
       - "${PANEL_HTTP_PORT:-8080}:8080"
     volumes:
-      - nginx-config:/etc/nginx-panel
-      - acme-webroot:/var/www/acme-webroot
-      - paneldata:/data
+      # 数据直接 bind mount 到宿主磁盘（${PANEL_DATA_ROOT:-./data} 下），可见、可直接备份，
+      # 不再交给 Docker 命名卷管理。已有的命名卷数据请先用
+      # scripts/migrate-volumes-to-disk.sh 迁移，再 docker compose up -d。
+      - ${PANEL_DATA_ROOT:-./data}/nginx-config:/etc/nginx-panel
+      - ${PANEL_DATA_ROOT:-./data}/acme-webroot:/var/www/acme-webroot
+      - ${PANEL_DATA_ROOT:-./data}/panel:/data
     security_opt:
       - no-new-privileges:true
     mem_limit: 256m
@@ -69,8 +72,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - nginx-config:/etc/nginx-panel
-      - acme-webroot:/var/www/acme-webroot
+      - ${PANEL_DATA_ROOT:-./data}/nginx-config:/etc/nginx-panel
+      - ${PANEL_DATA_ROOT:-./data}/acme-webroot:/var/www/acme-webroot
     mem_limit: 128m
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
@@ -78,8 +81,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-volumes:
-  nginx-config:
-  acme-webroot:
-  paneldata:
